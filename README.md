@@ -1,5 +1,9 @@
 # DX.Logger
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Delphi Versions](https://img.shields.io/badge/Delphi-10.3%2B-blue.svg)](https://www.embarcadero.com/products/delphi)
+[![Platforms](https://img.shields.io/badge/Platforms-Win%20%7C%20macOS%20%7C%20iOS%20%7C%20Android%20%7C%20Linux-lightgrey.svg)](https://github.com/omonien/DX.Logger)
+
 A minimalistic, cross-platform logging library for Delphi with a simple API and extensible provider architecture.
 
 ## Features
@@ -16,6 +20,22 @@ A minimalistic, cross-platform logging library for Delphi with a simple API and 
 - **Provider Architecture**: Easily extend with custom log targets
 - **Thread-Safe**: Safe for use in multi-threaded applications
 - **Single-Unit Core**: Minimal dependencies
+
+## Installation
+
+### Option 1: Manual Installation
+
+1. Clone or download this repository
+2. Add the `source` directory to your Delphi library path
+3. Add `DX.Logger` to your uses clause
+
+### Option 2: Git Submodule
+
+```bash
+git submodule add https://github.com/omonien/DX.Logger.git libs/DX.Logger
+```
+
+Then add `libs/DX.Logger/source` to your library path.
 
 ## Quick Start
 
@@ -86,7 +106,9 @@ type
 TDXLogger.SetMinLevel(TLogLevel.Info);
 ```
 
-## File Provider
+## Providers
+
+### File Provider
 
 The file provider supports:
 - Automatic file creation
@@ -95,17 +117,63 @@ The file provider supports:
 - Thread-safe file writing
 - UTF-8 encoding
 
-### File Provider Configuration
+**Configuration:**
 
 ```delphi
+uses
+  DX.Logger,
+  DX.Logger.Provider.TextFile;
+
 // Set custom log file name
 TFileLogProvider.SetLogFileName('C:\Logs\myapp.log');
 
 // Set maximum file size before rotation (default: 10 MB)
 TFileLogProvider.SetMaxFileSize(5 * 1024 * 1024); // 5 MB
+
+// Register provider
+TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
 ```
 
 When the log file reaches the maximum size, it's automatically renamed with a timestamp and a new file is created.
+
+### Seq Provider
+
+The Seq provider sends structured log events to a [Seq](https://datalust.co/seq) server using the CLEF (Compact Log Event Format).
+
+Features:
+- Asynchronous, non-blocking logging
+- Automatic batching of events
+- Configurable batch size and flush interval
+- Thread-safe operation
+
+**Configuration:**
+
+```delphi
+uses
+  DX.Logger,
+  DX.Logger.Provider.Seq;
+
+// Configure Seq server
+TSeqLogProvider.SetServerUrl('https://your-seq-server.example.com');
+TSeqLogProvider.SetApiKey('your-api-key-here');
+
+// Optional: Configure batching
+TSeqLogProvider.SetBatchSize(20);        // Default: 10
+TSeqLogProvider.SetFlushInterval(5000);  // Default: 2000 ms
+
+// Register provider
+TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
+
+// Use logging as normal
+DXLog('Application started');
+
+// Manually flush if needed
+TSeqLogProvider.Instance.Flush;
+```
+
+> **Important:** Never commit real API keys! See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for secure credential management.
+
+See [docs/SEQ_PROVIDER.md](docs/SEQ_PROVIDER.md) for detailed documentation.
 
 ## Creating Custom Providers
 
@@ -156,9 +224,21 @@ TDXLogger.Instance.RegisterProvider(TMyCustomProvider.Create);
 - Messages appear in system logs
 - File provider available
 
+## Configuration & Security
+
+For information on securely managing API keys and sensitive configuration:
+- See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for local development setup
+- See [SECURITY.md](SECURITY.md) for security best practices
+- See [docs/SEQ_PROVIDER.md](docs/SEQ_PROVIDER.md) for Seq-specific configuration
+
 ## Examples
 
-See the `examples/SimpleConsole` directory for a complete working example.
+### Available Examples
+
+- **[SimpleConsole](examples/SimpleConsole/)** - Basic console logging example
+- **[SeqExample](examples/SeqExample/)** - Seq provider example with configuration management
+
+Each example includes its own README with setup instructions.
 
 ## Testing
 
@@ -182,17 +262,23 @@ DX.Logger.Tests.exe
 DX.Logger/
 ├── source/
 │   ├── DX.Logger.pas                     # Core logger unit
-│   └── DX.Logger.Provider.TextFile.pas   # File logging provider
+│   ├── DX.Logger.Provider.TextFile.pas   # File logging provider
+│   └── DX.Logger.Provider.Seq.pas        # Seq logging provider
 ├── examples/
-│   └── SimpleConsole/                    # Console example application
+│   ├── SimpleConsole/                    # Console example application
+│   └── SeqExample/                       # Seq provider example
 ├── tests/
 │   ├── DUnitX/                           # DUnitX framework (submodule)
 │   ├── DX.Logger.Tests.dpr               # Test project
 │   ├── DX.Logger.Tests.Core.pas          # Core logger tests
 │   ├── DX.Logger.Tests.FileProvider.pas  # File provider tests
+│   ├── DX.Logger.Tests.SeqProvider.pas   # Seq provider tests
 │   └── README.md                         # Test documentation
 ├── docs/
-│   └── Delphi Style Guide EN.md          # Coding standards
+│   ├── Delphi Style Guide EN.md          # Coding standards
+│   ├── SEQ_PROVIDER.md                   # Seq provider documentation
+│   └── CONFIGURATION.md                  # Configuration guide
+├── config.example.ini                    # Example configuration (safe to commit)
 └── README.md
 ```
 
@@ -236,11 +322,33 @@ SOFTWARE.
 ## Contributing
 
 Contributions are welcome! Please ensure:
-- Code follows the Delphi Style Guide
+- Code follows the [Delphi Style Guide](docs/Delphi%20Style%20Guide%20EN.md)
 - All files use UTF-8 with BOM encoding
 - Line endings are CRLF
 - Output paths follow the `$(Platform)/$(Config)` pattern
+- Add tests for new features
+- Update documentation as needed
+
+### How to Contribute
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## Support
 
-For issues, questions, or suggestions, please open an issue on GitHub.
+- **Issues**: For bugs and feature requests, please [open an issue](https://github.com/omonien/DX.Logger/issues)
+- **Discussions**: For questions and general discussion, use [GitHub Discussions](https://github.com/omonien/DX.Logger/discussions)
+- **Security**: For security vulnerabilities, see [SECURITY.md](SECURITY.md)
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a list of changes in each version.
+
+## Acknowledgments
+
+- Built with [Delphi](https://www.embarcadero.com/products/delphi)
+- Testing framework: [DUnitX](https://github.com/VSoftTechnologies/DUnitX)
+- Inspired by modern logging libraries across various platforms
