@@ -3,6 +3,9 @@
 {
   DX.Logger - Minimalistic Cross-Platform Logger for Delphi
 
+  Copyright (c) 2025 Olaf Monien
+  SPDX-License-Identifier: MIT
+
   Simple usage:
     uses DX.Logger;
 

@@ -3,6 +3,9 @@
 {
   DX.Logger.Provider.TextFile - File logging provider for DX.Logger
 
+  Copyright (c) 2025 Olaf Monien
+  SPDX-License-Identifier: MIT
+
   Simple usage:
     uses
       DX.Logger,
