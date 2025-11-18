@@ -77,3 +77,8 @@ GTAGS
 # Test artifacts
 test-results.xml
 *.log
+
+# Local configuration files (contain sensitive data)
+config.local.ini
+*.local.ini
+.env.local
