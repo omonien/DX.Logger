@@ -7,7 +7,7 @@
 uses
   System.SysUtils,
   DX.Logger in '..\..\source\DX.Logger.pas',
-  DX.Logger.Provider.File in '..\..\source\DX.Logger.Provider.File.pas';
+  DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas';
 
 begin
   try
@@ -47,8 +47,7 @@ begin
 
     DXLog('Application stopped');
   except
-    on E: Exception do
-    begin
+    on E: Exception do begin
       DXLogError('Exception: ' + E.ClassName + ': ' + E.Message);
       Writeln(E.ClassName, ': ', E.Message);
     end;
