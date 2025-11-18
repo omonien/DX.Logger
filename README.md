@@ -37,7 +37,7 @@ end.
 ```delphi
 uses
   DX.Logger,
-  DX.Logger.Provider.File;  // Automatically adds file logging
+  DX.Logger.Provider.TextFile;  // Automatically adds file logging
 
 begin
   // Optional: Configure file provider
@@ -160,6 +160,17 @@ TDXLogger.Instance.RegisterProvider(TMyCustomProvider.Create);
 
 See the `examples/SimpleConsole` directory for a complete working example.
 
+## Testing
+
+The project includes comprehensive unit tests using DUnitX. See `tests/README.md` for details.
+
+To run tests:
+```cmd
+cd tests
+dcc32 DX.Logger.Tests.dpr
+DX.Logger.Tests.exe
+```
+
 ## Requirements
 
 - Delphi 10.3 or later (for inline variables)
@@ -170,12 +181,18 @@ See the `examples/SimpleConsole` directory for a complete working example.
 ```
 DX.Logger/
 ├── source/
-│   ├── DX.Logger.pas                 # Core logger unit
-│   └── DX.Logger.Provider.File.pas   # File logging provider
+│   ├── DX.Logger.pas                     # Core logger unit
+│   └── DX.Logger.Provider.TextFile.pas   # File logging provider
 ├── examples/
-│   └── SimpleConsole/                # Console example application
+│   └── SimpleConsole/                    # Console example application
+├── tests/
+│   ├── DUnitX/                           # DUnitX framework (submodule)
+│   ├── DX.Logger.Tests.dpr               # Test project
+│   ├── DX.Logger.Tests.Core.pas          # Core logger tests
+│   ├── DX.Logger.Tests.FileProvider.pas  # File provider tests
+│   └── README.md                         # Test documentation
 ├── docs/
-│   └── Delphi Style Guide EN.md      # Coding standards
+│   └── Delphi Style Guide EN.md          # Coding standards
 └── README.md
 ```
 

@@ -73,3 +73,7 @@ GTAGS
 !.vscode/extensions.json
 !.vscode/tasks.json
 !.vscode/launch.json
+
+# Test artifacts
+test-results.xml
+*.log
