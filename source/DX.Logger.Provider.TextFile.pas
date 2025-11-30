@@ -23,13 +23,14 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  DX.Logger;
+  DX.Logger,
+  DX.Logger.Provider.Async;
 
 type
   /// <summary>
   /// File-based log provider with automatic rotation
   /// </summary>
-  TFileLogProvider = class(TInterfacedObject, ILogProvider)
+  TFileLogProvider = class(TAsyncLogProvider)
   private
     class var FInstance: TFileLogProvider;
     class var FLogFileName: string;
@@ -37,14 +38,14 @@ type
     class var FLock: TObject;
   private
     procedure CheckAndRotateFile;
+  protected
+    /// <summary>
+    /// Write batch of log entries to file
+    /// </summary>
+    procedure WriteBatch(const AEntries: TArray<TLogEntry>); override;
   public
     constructor Create;
     destructor Destroy; override;
-
-    /// <summary>
-    /// Log message to file
-    /// </summary>
-    procedure Log(const AEntry: TLogEntry);
 
     /// <summary>
     /// Set log file name (default: application name + .log)
@@ -66,11 +67,6 @@ type
     /// Get singleton instance
     /// </summary>
     class function Instance: TFileLogProvider;
-
-    /// <summary>
-    /// Close the current log file (mainly for testing purposes)
-    /// </summary>
-    procedure Close;
 
     /// <summary>
     /// Cleanup on application exit
@@ -100,13 +96,14 @@ end;
 
 destructor TFileLogProvider.Destroy;
 begin
-  // Nothing to clean up - we don't keep files open
   inherited;
 end;
 
 class destructor TFileLogProvider.Destroy;
 begin
-  FreeAndNil(FInstance);
+  // During shutdown, just set to nil without freeing
+  // The instance will be freed by the reference counting
+  FInstance := nil;
   FreeAndNil(FLock);
 end;
 
@@ -114,6 +111,9 @@ class function TFileLogProvider.Instance: TFileLogProvider;
 begin
   if not Assigned(FInstance) then
   begin
+    if not Assigned(FLock) then
+      FLock := TObject.Create;
+
     TMonitor.Enter(FLock);
     try
       if not Assigned(FInstance) then  // Double-checked locking
@@ -127,6 +127,9 @@ end;
 
 class procedure TFileLogProvider.SetLogFileName(const AFileName: string);
 begin
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
   TMonitor.Enter(FLock);
   try
     FLogFileName := AFileName;
@@ -137,18 +140,15 @@ end;
 
 class procedure TFileLogProvider.SetMaxFileSize(ASize: Int64);
 begin
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
   TMonitor.Enter(FLock);
   try
     FMaxFileSize := ASize;
   finally
     TMonitor.Exit(FLock);
   end;
-end;
-
-procedure TFileLogProvider.Close;
-begin
-  // Nothing to do - we don't keep files open
-  // This method exists for testing purposes (to ensure all data is flushed)
 end;
 
 procedure TFileLogProvider.CheckAndRotateFile;
@@ -194,13 +194,18 @@ begin
   end;
 end;
 
-procedure TFileLogProvider.Log(const AEntry: TLogEntry);
+procedure TFileLogProvider.WriteBatch(const AEntries: TArray<TLogEntry>);
 var
   LLogLine: string;
   LDirectory: string;
   LStream: TFileStream;
   LBytes: TBytes;
+  LAllBytes: TMemoryStream;
+  LEntry: TLogEntry;
 begin
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
   TMonitor.Enter(FLock);
   try
     // Skip logging if no filename is set
@@ -212,32 +217,45 @@ begin
     if (LDirectory <> '') and not TDirectory.Exists(LDirectory) then
       TDirectory.CreateDirectory(LDirectory);
 
-    // Format log entry
-    LLogLine := Format('[%s] [%s] [Thread:%d] %s',
-      [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', AEntry.Timestamp),
-       LogLevelToString(AEntry.Level),
-       AEntry.ThreadID,
-       AEntry.Message]) + sLineBreak;
-
-    // Convert to bytes
-    LBytes := TEncoding.UTF8.GetBytes(LLogLine);
-
     // Check if rotation is needed BEFORE writing
-    // This ensures we don't rotate while other threads might be writing
     CheckAndRotateFile;
 
-    // Open file in append mode, write, and close
-    if TFile.Exists(FLogFileName) then
-      LStream := TFileStream.Create(FLogFileName, fmOpenWrite or fmShareDenyWrite)
-    else
-      LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
+    // Build all log lines in memory first
+    LAllBytes := TMemoryStream.Create;
     try
-      // Seek to end for appending
-      LStream.Seek(0, soEnd);
-      // Write bytes
-      LStream.WriteBuffer(LBytes[0], Length(LBytes));
+      for LEntry in AEntries do
+      begin
+        // Format log entry
+        LLogLine := Format('[%s] [%s] [Thread:%d] %s',
+          [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
+           LogLevelToString(LEntry.Level),
+           LEntry.ThreadID,
+           LEntry.Message]) + sLineBreak;
+
+        // Convert to bytes and add to stream
+        LBytes := TEncoding.UTF8.GetBytes(LLogLine);
+        LAllBytes.WriteBuffer(LBytes[0], Length(LBytes));
+      end;
+
+      // Write all bytes in one operation
+      if LAllBytes.Size > 0 then
+      begin
+        if TFile.Exists(FLogFileName) then
+          LStream := TFileStream.Create(FLogFileName, fmOpenWrite or fmShareDenyWrite)
+        else
+          LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
+        try
+          // Seek to end for appending
+          LStream.Seek(0, soEnd);
+          // Write all bytes
+          LAllBytes.Position := 0;
+          LStream.CopyFrom(LAllBytes, LAllBytes.Size);
+        finally
+          LStream.Free;
+        end;
+      end;
     finally
-      LStream.Free;
+      LAllBytes.Free;
     end;
   finally
     TMonitor.Exit(FLock);
@@ -246,7 +264,6 @@ end;
 
 initialization
   // Set defaults
-  TFileLogProvider.FLock := TObject.Create;
   TFileLogProvider.FMaxFileSize := C_DEFAULT_MAX_FILE_SIZE;
   TFileLogProvider.FLogFileName := '';
 

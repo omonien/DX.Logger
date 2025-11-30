@@ -21,7 +21,7 @@ unit DX.Logger.Provider.UI;
 
   Features:
     - Thread-safe logging to TStrings (TMemo.Lines, etc.)
-    - Synchronization to main thread via TThread.Queue
+    - Synchronization to main thread via TThread.Synchronize
     - Optional append on top or bottom
     - Automatic batching for better performance
 }
@@ -31,35 +31,31 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  System.Generics.Collections,
-  DX.Logger;
+  DX.Logger,
+  DX.Logger.Provider.Async;
 
 type
   /// <summary>
   /// UI-based log provider for displaying logs in TMemo or similar controls
   /// </summary>
-  TUILogProvider = class(TInterfacedObject, ILogProvider)
+  TUILogProvider = class(TAsyncLogProvider)
   private
     class var FInstance: TUILogProvider;
     class var FLock: TObject;
   private
     FExternalStrings: TStrings;
     FAppendOnTop: Boolean;
-    FPendingMessages: TThreadedQueue<string>;
-    FWorkerThread: TThread;
-    FShutdown: Boolean;
 
-    procedure WorkerThreadExecute;
     procedure UpdateExternalStrings(const AMessages: TArray<string>);
     function FormatLogEntry(const AEntry: TLogEntry): string;
+  protected
+    /// <summary>
+    /// Write batch of log entries to UI
+    /// </summary>
+    procedure WriteBatch(const AEntries: TArray<TLogEntry>); override;
   public
     constructor Create;
     destructor Destroy; override;
-
-    /// <summary>
-    /// Log message to UI (queued for async processing)
-    /// </summary>
-    procedure Log(const AEntry: TLogEntry);
 
     /// <summary>
     /// Set external strings (e.g., TMemo.Lines) to log to
@@ -84,46 +80,19 @@ type
 
 implementation
 
-uses
-  System.SyncObjs,
-  System.DateUtils;
-
-const
-  C_QUEUE_DEPTH = 1000;
-  C_FLUSH_INTERVAL = 100; // 100ms
-
 { TUILogProvider }
 
 constructor TUILogProvider.Create;
 begin
   inherited Create;
-  FShutdown := False;
   FAppendOnTop := False;
   FExternalStrings := nil;
-  FPendingMessages := TThreadedQueue<string>.Create(C_QUEUE_DEPTH, INFINITE, 100);
-
-  // Start worker thread
-  FWorkerThread := TThread.CreateAnonymousThread(WorkerThreadExecute);
-  FWorkerThread.FreeOnTerminate := False;
-  FWorkerThread.Start;
 end;
 
 destructor TUILogProvider.Destroy;
 begin
-  FShutdown := True;
-
   // Disconnect from external strings first to prevent UI updates during shutdown
   FExternalStrings := nil;
-
-  // Wait for worker thread to finish
-  if Assigned(FWorkerThread) then
-  begin
-    FWorkerThread.Terminate;
-    FWorkerThread.WaitFor;
-    FreeAndNil(FWorkerThread);
-  end;
-
-  FreeAndNil(FPendingMessages);
   inherited;
 end;
 
@@ -153,18 +122,6 @@ begin
   Result := FInstance;
 end;
 
-procedure TUILogProvider.Log(const AEntry: TLogEntry);
-var
-  LFormattedMessage: string;
-begin
-  // Skip if no external strings assigned
-  if not Assigned(FExternalStrings) then
-    Exit;
-
-  LFormattedMessage := FormatLogEntry(AEntry);
-  FPendingMessages.PushItem(LFormattedMessage);
-end;
-
 function TUILogProvider.FormatLogEntry(const AEntry: TLogEntry): string;
 begin
   Result := Format('[%s] [%s] %s',
@@ -173,54 +130,33 @@ begin
      AEntry.Message]);
 end;
 
-procedure TUILogProvider.WorkerThreadExecute;
+procedure TUILogProvider.WriteBatch(const AEntries: TArray<TLogEntry>);
 var
-  LBatch: TList<string>;
-  LMessage: string;
-  LWaitResult: TWaitResult;
-  LLastFlush: TDateTime;
+  LMessages: TArray<string>;
+  LEntry: TLogEntry;
+  LIndex: Integer;
 begin
-  LBatch := TList<string>.Create;
-  try
-    LLastFlush := Now;
+  // Skip if no external strings assigned
+  if not Assigned(FExternalStrings) then
+    Exit;
 
-    while not FShutdown do
-    begin
-      // Try to get a message with timeout
-      LWaitResult := FPendingMessages.PopItem(LMessage);
-
-      // Exit if queue was shut down
-      if LWaitResult = TWaitResult.wrAbandoned then
-        Break;
-
-      if LWaitResult = TWaitResult.wrSignaled then
-      begin
-        LBatch.Add(LMessage);
-      end;
-
-      // Flush batch if interval elapsed or we have messages
-      if (LBatch.Count > 0) and
-         ((MilliSecondsBetween(Now, LLastFlush) >= C_FLUSH_INTERVAL) or
-          (LBatch.Count >= 10)) then
-      begin
-        UpdateExternalStrings(LBatch.ToArray);
-        LBatch.Clear;
-        LLastFlush := Now;
-      end;
-    end;
-
-    // Final flush on shutdown
-    if LBatch.Count > 0 then
-      UpdateExternalStrings(LBatch.ToArray);
-  finally
-    LBatch.Free;
+  // Format all entries
+  SetLength(LMessages, Length(AEntries));
+  LIndex := 0;
+  for LEntry in AEntries do
+  begin
+    LMessages[LIndex] := FormatLogEntry(LEntry);
+    Inc(LIndex);
   end;
+
+  // Update UI
+  UpdateExternalStrings(LMessages);
 end;
 
 procedure TUILogProvider.UpdateExternalStrings(const AMessages: TArray<string>);
 begin
-  // Skip if shutting down or no external strings
-  if FShutdown or not Assigned(FExternalStrings) then
+  // Skip if no external strings
+  if not Assigned(FExternalStrings) then
     Exit;
 
   // Synchronize to main thread for UI update
@@ -229,7 +165,7 @@ begin
     var
       LMessage: string;
     begin
-      if FShutdown or not Assigned(FExternalStrings) then
+      if not Assigned(FExternalStrings) then
         Exit;
 
       try
@@ -255,9 +191,6 @@ begin
       end;
     end);
 end;
-
-initialization
-  TUILogProvider.FLock := TObject.Create;
 
 end.
 
