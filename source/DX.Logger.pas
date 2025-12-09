@@ -51,6 +51,7 @@ type
     Timestamp: TDateTime;
     Level: TLogLevel;
     Message: string;
+    Details: string;    // Optional: Additional detail information (e.g., large JSON payloads)
     ThreadID: TThreadID;
   end;
 
@@ -90,9 +91,9 @@ type
     procedure UnregisterProvider(const AProvider: ILogProvider);
 
     /// <summary>
-    /// Log a message with specified level
+    /// Log a message with optional level and details
     /// </summary>
-    procedure Log(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info);
+    procedure Log(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = ''); overload;
 
     /// <summary>
     /// Get singleton instance
@@ -106,9 +107,9 @@ type
   end;
 
 /// <summary>
-/// Convenience function for logging
+/// Convenience function for logging with optional level and details
 /// </summary>
-procedure DXLog(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info); inline;
+procedure DXLog(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = ''); overload; inline;
 
 /// <summary>
 /// Convenience functions for specific log levels
@@ -261,7 +262,7 @@ begin
   end;
 end;
 
-procedure TDXLogger.Log(const AMessage: string; ALevel: TLogLevel);
+procedure TDXLogger.Log(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = '');
 var
   LEntry: TLogEntry;
   LProvider: ILogProvider;
@@ -273,6 +274,7 @@ begin
   LEntry.Timestamp := Now;
   LEntry.Level := ALevel;
   LEntry.Message := AMessage;
+  LEntry.Details := ADetails;
   LEntry.ThreadID := TThread.CurrentThread.ThreadID;
 
   TMonitor.Enter(Self);
@@ -286,9 +288,9 @@ end;
 
 { Global Functions }
 
-procedure DXLog(const AMessage: string; ALevel: TLogLevel);
+procedure DXLog(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = '');
 begin
-  TDXLogger.Instance.Log(AMessage, ALevel);
+  TDXLogger.Instance.Log(AMessage, ALevel, ADetails);
 end;
 
 procedure DXLogTrace(const AMessage: string);

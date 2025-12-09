@@ -31,6 +31,7 @@ interface
 uses
   System.SysUtils,
   System.Classes,
+  System.Generics.Collections,
   DX.Logger,
   DX.Logger.Provider.Async;
 
@@ -132,25 +133,46 @@ end;
 
 procedure TUILogProvider.WriteBatch(const AEntries: TArray<TLogEntry>);
 var
-  LMessages: TArray<string>;
+  LMessages: TList<string>;
   LEntry: TLogEntry;
-  LIndex: Integer;
+  LMessagesArray: TArray<string>;
 begin
   // Skip if no external strings assigned
   if not Assigned(FExternalStrings) then
     Exit;
 
-  // Format all entries
-  SetLength(LMessages, Length(AEntries));
-  LIndex := 0;
-  for LEntry in AEntries do
-  begin
-    LMessages[LIndex] := FormatLogEntry(LEntry);
-    Inc(LIndex);
+  // Format all entries (main message + optional details as separate line)
+  LMessages := TList<string>.Create;
+  try
+    for LEntry in AEntries do
+    begin
+      // Add main log message
+      LMessages.Add(FormatLogEntry(LEntry));
+
+      // Add details as separate TRACE line if present (truncated to 50 chars)
+      if LEntry.Details <> '' then
+      begin
+        var LDetailsDisplay: string;
+        if Length(LEntry.Details) > 50 then
+          LDetailsDisplay := Copy(LEntry.Details, 1, 50) + '... [see log file for details]'
+        else
+          LDetailsDisplay := LEntry.Details;
+
+        LMessages.Add(Format('[%s] [%s] %s',
+          [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
+           'TRACE',
+           LDetailsDisplay]));
+      end;
+    end;
+
+    // Convert to array
+    LMessagesArray := LMessages.ToArray;
+  finally
+    LMessages.Free;
   end;
 
   // Update UI
-  UpdateExternalStrings(LMessages);
+  UpdateExternalStrings(LMessagesArray);
 end;
 
 procedure TUILogProvider.UpdateExternalStrings(const AMessages: TArray<string>);

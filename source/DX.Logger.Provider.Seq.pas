@@ -43,6 +43,7 @@ type
     class var FServerUrl: string;
     class var FApiKey: string;
     class var FSource: string;
+    class var FInstanceName: string;  // Instance identifier (e.g., "at.esculenta.elkerest-t")
     class var FBatchSize: Integer;
     class var FFlushInterval: Integer;
     class var FLock: TObject;
@@ -83,6 +84,11 @@ type
     /// Set source identifier (default: application EXE name)
     /// </summary>
     class procedure SetSource(const ASource: string);
+
+    /// <summary>
+    /// Set instance identifier (e.g., "at.esculenta.elkerest-t")
+    /// </summary>
+    class procedure SetInstance(const AInstance: string);
 
     /// <summary>
     /// Set batch size (default: 10)
@@ -195,6 +201,19 @@ begin
   end;
 end;
 
+class procedure TSeqLogProvider.SetInstance(const AInstance: string);
+begin
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
+  TMonitor.Enter(FLock);
+  try
+    FInstanceName := AInstance;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+end;
+
 class procedure TSeqLogProvider.SetBatchSize(ASize: Integer);
 begin
   if not Assigned(FLock) then
@@ -273,18 +292,20 @@ var
   LJson: TJSONObject;
   LTimestamp: string;
   LSource: string;
+  LInstance: string;
 begin
   // Format timestamp as ISO 8601
   LTimestamp := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss.zzz"Z"',
     TTimeZone.Local.ToUniversalTime(AEntry.Timestamp));
 
-  // Get source (thread-safe)
+  // Get source and instance (thread-safe)
   if not Assigned(FLock) then
     FLock := TObject.Create;
 
   TMonitor.Enter(FLock);
   try
     LSource := FSource;
+    LInstance := FInstanceName;
   finally
     TMonitor.Exit(FLock);
   end;
@@ -295,6 +316,14 @@ begin
     LJson.AddPair('@l', LogLevelToSeqLevel(AEntry.Level));
     LJson.AddPair('@m', AEntry.Message);
     LJson.AddPair('ThreadId', TJSONNumber.Create(AEntry.ThreadID));
+
+    // Add details if present
+    if AEntry.Details <> '' then
+      LJson.AddPair('Details', AEntry.Details);
+
+    // Add instance if configured
+    if LInstance <> '' then
+      LJson.AddPair('Instance', LInstance);
 
     // Add source if configured
     if LSource <> '' then
@@ -367,6 +396,7 @@ initialization
   TSeqLogProvider.FServerUrl := '';
   TSeqLogProvider.FApiKey := '';
   TSeqLogProvider.FSource := ChangeFileExt(ExtractFileName(ParamStr(0)), '');
+  TSeqLogProvider.FInstanceName := '';
 
 end.
 

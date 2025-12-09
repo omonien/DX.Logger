@@ -225,7 +225,7 @@ begin
     try
       for LEntry in AEntries do
       begin
-        // Format log entry
+        // Format main log entry
         LLogLine := Format('[%s] [%s] [Thread:%d] %s',
           [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
            LogLevelToString(LEntry.Level),
@@ -235,6 +235,19 @@ begin
         // Convert to bytes and add to stream
         LBytes := TEncoding.UTF8.GetBytes(LLogLine);
         LAllBytes.WriteBuffer(LBytes[0], Length(LBytes));
+
+        // Add details as separate TRACE line if present
+        if LEntry.Details <> '' then
+        begin
+          LLogLine := Format('[%s] [%s] [Thread:%d] %s',
+            [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
+             'TRACE',
+             LEntry.ThreadID,
+             LEntry.Details]) + sLineBreak;
+
+          LBytes := TEncoding.UTF8.GetBytes(LLogLine);
+          LAllBytes.WriteBuffer(LBytes[0], Length(LBytes));
+        end;
       end;
 
       // Write all bytes in one operation

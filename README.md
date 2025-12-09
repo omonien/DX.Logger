@@ -75,8 +75,8 @@ end.
 ### Log Functions
 
 ```delphi
-// Generic log function
-procedure DXLog(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info);
+// Generic log function with optional details
+procedure DXLog(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = '');
 
 // Convenience functions for specific levels
 procedure DXLogTrace(const AMessage: string);
@@ -85,6 +85,8 @@ procedure DXLogInfo(const AMessage: string);
 procedure DXLogWarn(const AMessage: string);
 procedure DXLogError(const AMessage: string);
 ```
+
+**Details Parameter**: The optional `ADetails` parameter allows you to provide additional context or supplementary information with your log entry. Each provider handles details according to its format and requirements (see [Provider-Specific Details Handling](#provider-specific-details-handling) below).
 
 ### Log Levels
 
@@ -105,6 +107,16 @@ type
 // Set minimum log level (messages below this level are ignored)
 TDXLogger.SetMinLevel(TLogLevel.Info);
 ```
+
+### Provider-Specific Details Handling
+
+The `Details` parameter in log functions provides additional contextual information. Each provider handles this data according to its format and purpose:
+
+- **File Provider**: Writes details as a separate TRACE-level line immediately after the main log entry, preserving all content
+- **UI Provider**: Writes details as a separate TRACE-level line, but truncates to 50 characters with a continuation message (`"... [see log file for details]"`) to prevent UI overflow
+- **Seq Provider**: Includes details as a structured property in the CLEF (Compact Log Event Format) JSON payload, making it searchable and queryable in Seq
+
+This design allows each provider to optimize details handling for its specific use case while maintaining a consistent API.
 
 ## Providers
 
@@ -174,6 +186,38 @@ TSeqLogProvider.Instance.Flush;
 > **Important:** Never commit real API keys! See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for secure credential management.
 
 See [docs/SEQ_PROVIDER.md](docs/SEQ_PROVIDER.md) for detailed documentation.
+
+### UI Provider
+
+The UI provider enables logging to visual controls like `TMemo.Lines` or any `TStrings`-based component.
+
+Features:
+- Thread-safe UI updates via `TThread.Synchronize`
+- Automatic batching for better performance
+- Configurable insert position (top or bottom)
+- Details truncation to prevent UI overflow
+
+**Configuration:**
+
+```delphi
+uses
+  DX.Logger,
+  DX.Logger.Provider.UI;
+
+// Register UI provider with TMemo.Lines
+TUILogProvider.Instance.ExternalStrings := MemoInfo.Lines;
+TUILogProvider.Instance.AppendOnTop := False;  // False = append at bottom (default)
+TDXLogger.Instance.RegisterProvider(TUILogProvider.Instance);
+
+// Use logging as normal
+DXLog('Application started');
+DXLog('Processing item', TLogLevel.Info, 'Large JSON payload here...');
+
+// Unregister when form closes
+TUILogProvider.Instance.ExternalStrings := nil;
+```
+
+**Details Handling**: When log entries include details, the UI provider writes them as a separate TRACE-level line. To prevent UI overflow with large details (e.g., JSON payloads, stack traces), details are truncated to 50 characters with a continuation message: `"... [see log file for details]"`. This keeps the UI readable while preserving full details in file logs.
 
 ## Creating Custom Providers
 
@@ -263,7 +307,8 @@ DX.Logger/
 ├── source/
 │   ├── DX.Logger.pas                     # Core logger unit
 │   ├── DX.Logger.Provider.TextFile.pas   # File logging provider
-│   └── DX.Logger.Provider.Seq.pas        # Seq logging provider
+│   ├── DX.Logger.Provider.Seq.pas        # Seq logging provider
+│   └── DX.Logger.Provider.UI.pas         # UI logging provider
 ├── examples/
 │   ├── SimpleConsole/                    # Console example application
 │   └── SeqExample/                       # Seq provider example
