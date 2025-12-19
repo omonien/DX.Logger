@@ -167,10 +167,14 @@ begin
 
   {$IFDEF CONSOLE}
   WriteLn(LFormattedMessage);
+  if AEntry.Details <> '' then
+    WriteLn('Details: ' + AEntry.Details);
   {$ENDIF}
 
   {$IFDEF MSWINDOWS}
   OutputDebugString(PChar(LFormattedMessage));
+  if AEntry.Details <> '' then
+    OutputDebugString(PChar('Details: ' + AEntry.Details));
   {$ENDIF}
 
   {$IFDEF ANDROID}
