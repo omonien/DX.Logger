@@ -136,6 +136,7 @@ uses
   {$ENDIF}
   {$IFDEF MACOS}
   Macapi.Helpers,
+  Macapi.Foundation,
   {$ENDIF}
   {$IFDEF LINUX}
   Posix.Syslog,
