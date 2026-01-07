@@ -51,7 +51,10 @@ type
     /// Set log file name (default: application name + .log)
     /// </summary>
     /// <remarks>
-    /// Must be called before first log entry to avoid race conditions
+    /// Thread-safe operation protected by locks. Can be safely called at any time.
+    /// If a log file already exists with the previous name, it will be
+    /// automatically renamed to the new filename to preserve all log entries.
+    /// If renaming fails, a new log file is created with a warning message.
     /// </remarks>
     class procedure SetLogFileName(const AFileName: string);
 
@@ -126,13 +129,80 @@ begin
 end;
 
 class procedure TFileLogProvider.SetLogFileName(const AFileName: string);
+var
+  LOldFileName: string;
+  LDirectory: string;
+  LStream: TFileStream;
+  LBytes: TBytes;
+  LLogLine: string;
+  LMoveSucceeded: Boolean;
+  LErrorMessage: string;
 begin
   if not Assigned(FLock) then
     FLock := TObject.Create;
 
   TMonitor.Enter(FLock);
   try
+    LOldFileName := FLogFileName;
+    LMoveSucceeded := False;
+    LErrorMessage := '';
+
+    // If changing to a different filename and old file exists, rename it
+    if (LOldFileName <> '') and (LOldFileName <> AFileName) and TFile.Exists(LOldFileName) then
+    begin
+      try
+        // Ensure directory exists for new filename
+        LDirectory := TPath.GetDirectoryName(AFileName);
+        if (LDirectory <> '') and not TDirectory.Exists(LDirectory) then
+          TDirectory.CreateDirectory(LDirectory);
+
+        // Move the existing log file to the new name
+        TFile.Move(LOldFileName, AFileName);
+        LMoveSucceeded := True;
+      except
+        on E: Exception do
+        begin
+          // Move failed - we'll create a new file and log the situation
+          LErrorMessage := E.Message;
+        end;
+      end;
+    end;
+
+    // Update the filename
     FLogFileName := AFileName;
+
+    // If move failed, create new log file with explanation
+    if (LOldFileName <> '') and (LOldFileName <> AFileName) and
+       TFile.Exists(LOldFileName) and not LMoveSucceeded then
+    begin
+      try
+        // Ensure directory exists
+        LDirectory := TPath.GetDirectoryName(AFileName);
+        if (LDirectory <> '') and not TDirectory.Exists(LDirectory) then
+          TDirectory.CreateDirectory(LDirectory);
+
+        // Create new log file with explanation
+        LLogLine := Format('[%s] [WARN] [Thread:%d] Log file name changed from "%s" to "%s". ' +
+          'Previous log file could not be renamed (Error: %s). Early log entries remain in: %s' + sLineBreak,
+          [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now),
+           TThread.Current.ThreadID,
+           LOldFileName,
+           AFileName,
+           LErrorMessage,
+           LOldFileName]);
+
+        LBytes := TEncoding.UTF8.GetBytes(LLogLine);
+        LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
+        try
+          LStream.WriteBuffer(LBytes[0], Length(LBytes));
+        finally
+          LStream.Free;
+        end;
+      except
+        // Silently fail if we can't create the new file either
+        // Logging system should not crash the application
+      end;
+    end;
   finally
     TMonitor.Exit(FLock);
   end;
@@ -278,11 +348,6 @@ end;
 initialization
   // Set defaults
   TFileLogProvider.FMaxFileSize := C_DEFAULT_MAX_FILE_SIZE;
-  TFileLogProvider.FLogFileName := '';
-
-  // Note: File provider is NOT auto-registered
-  // Users must manually register it after setting the filename:
-  //   TFileLogProvider.SetLogFileName('myapp.log');
-  //   TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
-
+  TFileLogProvider.FLogFileName := ''; // Effective default : TPath.ChangeExtension(ParamStr(0), '.log')
+  TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
 end.
