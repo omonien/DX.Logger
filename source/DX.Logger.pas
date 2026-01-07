@@ -338,7 +338,11 @@ end;
 
 class constructor TDXLogger.Create;
 begin
-  FMinLevel := TLogLevel.Trace; // Default: log everything
+  {$IFDEF DEBUG}
+  FMinLevel := TLogLevel.Trace; // Debug Default: log everything
+  {$ELSE}
+  FMinLevel := TLogLevel.Info; // Release Default: log Info & Errors only
+  {$ENDIF}
   FLock := TObject.Create;
 end;
 
