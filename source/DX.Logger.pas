@@ -135,8 +135,8 @@ uses
   Androidapi.Log,
   {$ENDIF}
   {$IFDEF MACOS}
-  Macapi.Helpers,
-  Macapi.Foundation,
+	Macapi.Helpers,
+	Macapi.Foundation,
   {$ENDIF}
   {$IFDEF LINUX}
   Posix.Syslog,
@@ -189,7 +189,7 @@ begin
   {$ENDIF}
 
   {$IFDEF MACOS}
-  NSLog(StrToNSStr(LFormattedMessage));
+  NSLog(StringToId(LFormattedMessage));
   {$ENDIF}
 
   {$IFDEF LINUX}
