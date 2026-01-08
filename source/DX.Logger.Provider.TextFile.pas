@@ -81,23 +81,59 @@ implementation
 
 uses
   System.IOUtils,
-  System.SyncObjs;
+  System.SyncObjs
+  {$IF Defined(IOS)}
+  , iOSapi.Foundation
+  , Macapi.Helpers
+  {$ELSEIF Defined(MACOS)}
+  , Macapi.Foundation
+  , Macapi.Helpers
+  {$ENDIF}
+  ;
+
+{$IF Defined(MACOS) or Defined(IOS)}
+function GetBundleIdentifier(const ADefault: string): string;
+var
+  LBundle: NSBundle;
+  LId: NSString;
+begin
+  Result := ADefault;
+  LBundle := TNSBundle.Wrap(TNSBundle.OCClass.mainBundle);
+  if LBundle <> nil then
+  begin
+    LId := LBundle.bundleIdentifier;
+    if LId <> nil then
+      Result := NSStrToStr(LId);
+  end;
+end;
+
+function GetAppleLogFileName(const AAppName: string): string;
+var
+  LBundleId: string;
+begin
+  LBundleId := GetBundleIdentifier(AAppName);
+  Result := TPath.Combine(TPath.GetLibraryPath, 'Logs', LBundleId, AAppName + '.log');
+end;
+{$ENDIF}
 
 function GetDefaultLogFileName: string;
 var
   LAppName: string;
-  LLogDir: string;
 begin
   LAppName := TPath.GetFileNameWithoutExtension(ParamStr(0));
   if LAppName = '' then
     LAppName := 'Application';
 
-  {$IFDEF MACOS}
-  // In a .app bundle the executable directory is not a suitable/writable place.
-  // Use the user's (or sandbox container) Logs folder instead.
-  LLogDir := TPath.Combine(TPath.GetHomePath, 'Library/Logs');
-  LLogDir := TPath.Combine(LLogDir, LAppName);
-  Result := TPath.Combine(LLogDir, LAppName + '.log');
+  {$IFDEF IOS}
+    {$IF Defined(DEBUG) or Defined(TRACE)}
+    // On iOS, only enable file logging for debug/trace builds.
+    Result := GetAppleLogFileName(LAppName);
+    {$ELSE}
+    Result := '';
+    {$ENDIF}
+  {$ELSEIF Defined(MACOS)}
+  // Use Library/Logs/<bundle-id> (container-safe when sandboxed).
+  Result := GetAppleLogFileName(LAppName);
   {$ELSE}
   Result := TPath.ChangeExtension(ParamStr(0), '.log');
   {$ENDIF}
@@ -157,6 +193,7 @@ var
   LLogLine: string;
   LMoveSucceeded: Boolean;
   LErrorMessage: string;
+  LShareMode: Word;
 begin
   if not Assigned(FLock) then
     FLock := TObject.Create;
@@ -212,7 +249,12 @@ begin
            LOldFileName]);
 
         LBytes := TEncoding.UTF8.GetBytes(LLogLine);
-        LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
+        {$IFDEF MSWINDOWS}
+        LShareMode := fmShareDenyWrite;
+        {$ELSE}
+        LShareMode := fmShareDenyNone;
+        {$ENDIF}
+        LStream := TFileStream.Create(FLogFileName, fmCreate or LShareMode);
         try
           LStream.WriteBuffer(LBytes[0], Length(LBytes));
         finally
@@ -292,6 +334,8 @@ var
   LBytes: TBytes;
   LAllBytes: TMemoryStream;
   LEntry: TLogEntry;
+  LShareMode: Word;
+  LOpenMode: Word;
 begin
   if not Assigned(FLock) then
     FLock := TObject.Create;
@@ -349,10 +393,16 @@ begin
         if LAllBytes.Size > 0 then
         begin
           try
+            {$IFDEF MSWINDOWS}
+            LShareMode := fmShareDenyWrite;
+            {$ELSE}
+            LShareMode := fmShareDenyNone;
+            {$ENDIF}
+            LOpenMode := fmOpenReadWrite or LShareMode;
             if TFile.Exists(FLogFileName) then
-              LStream := TFileStream.Create(FLogFileName, fmOpenWrite or fmShareDenyWrite)
+              LStream := TFileStream.Create(FLogFileName, LOpenMode)
             else
-              LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
+              LStream := TFileStream.Create(FLogFileName, fmCreate or LShareMode);
             try
               // Seek to end for appending
               LStream.Seek(0, soEnd);
