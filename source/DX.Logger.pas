@@ -189,6 +189,10 @@ begin
   {$ENDIF}
 
   {$IFDEF MACOS}
+  // IMPORTANT:
+  // NSLog is a C varargs function (printf-style). Passing an Objective-C interface
+  // (e.g. NSString from StrToNSStr) can crash due to Delphi marshalling.
+  // Always pass an ObjC `id` (e.g. via StringToId / StrToId).
   NSLog(StringToId(LFormattedMessage));
   {$ENDIF}
 

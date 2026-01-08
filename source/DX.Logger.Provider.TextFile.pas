@@ -83,6 +83,26 @@ uses
   System.IOUtils,
   System.SyncObjs;
 
+function GetDefaultLogFileName: string;
+var
+  LAppName: string;
+  LLogDir: string;
+begin
+  LAppName := TPath.GetFileNameWithoutExtension(ParamStr(0));
+  if LAppName = '' then
+    LAppName := 'Application';
+
+  {$IFDEF MACOS}
+  // In a .app bundle the executable directory is not a suitable/writable place.
+  // Use the user's (or sandbox container) Logs folder instead.
+  LLogDir := TPath.Combine(TPath.GetHomePath, 'Library/Logs');
+  LLogDir := TPath.Combine(LLogDir, LAppName);
+  Result := TPath.Combine(LLogDir, LAppName + '.log');
+  {$ELSE}
+  Result := TPath.ChangeExtension(ParamStr(0), '.log');
+  {$ENDIF}
+end;
+
 const
   C_DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -94,7 +114,7 @@ begin
 
   // Set default filename if not set
   if FLogFileName = '' then
-    FLogFileName := TPath.ChangeExtension(ParamStr(0), '.log');
+    FLogFileName := GetDefaultLogFileName;
 end;
 
 destructor TFileLogProvider.Destroy;
@@ -282,63 +302,75 @@ begin
     if FLogFileName = '' then
       Exit;
 
-    // Ensure directory exists
-    LDirectory := TPath.GetDirectoryName(FLogFileName);
-    if (LDirectory <> '') and not TDirectory.Exists(LDirectory) then
-      TDirectory.CreateDirectory(LDirectory);
-
-    // Check if rotation is needed BEFORE writing
-    CheckAndRotateFile;
-
-    // Build all log lines in memory first
-    LAllBytes := TMemoryStream.Create;
     try
-      for LEntry in AEntries do
-      begin
-        // Format main log entry
-        LLogLine := Format('[%s] [%s] [Thread:%d] %s',
-          [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
-           LogLevelToString(LEntry.Level),
-           LEntry.ThreadID,
-           LEntry.Message]) + sLineBreak;
+      // Ensure directory exists
+      LDirectory := TPath.GetDirectoryName(FLogFileName);
+      if (LDirectory <> '') and not TDirectory.Exists(LDirectory) then
+        TDirectory.CreateDirectory(LDirectory);
 
-        // Convert to bytes and add to stream
-        LBytes := TEncoding.UTF8.GetBytes(LLogLine);
-        LAllBytes.WriteBuffer(LBytes[0], Length(LBytes));
+      // Check if rotation is needed BEFORE writing
+      try
+        CheckAndRotateFile;
+      except
+        // Ignore rotation errors - logging must never crash the application
+      end;
 
-        // Add details as separate TRACE line if present
-        if LEntry.Details <> '' then
+      // Build all log lines in memory first
+      LAllBytes := TMemoryStream.Create;
+      try
+        for LEntry in AEntries do
         begin
+          // Format main log entry
           LLogLine := Format('[%s] [%s] [Thread:%d] %s',
             [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
-             'TRACE',
+             LogLevelToString(LEntry.Level),
              LEntry.ThreadID,
-             LEntry.Details]) + sLineBreak;
+             LEntry.Message]) + sLineBreak;
 
+          // Convert to bytes and add to stream
           LBytes := TEncoding.UTF8.GetBytes(LLogLine);
           LAllBytes.WriteBuffer(LBytes[0], Length(LBytes));
-        end;
-      end;
 
-      // Write all bytes in one operation
-      if LAllBytes.Size > 0 then
-      begin
-        if TFile.Exists(FLogFileName) then
-          LStream := TFileStream.Create(FLogFileName, fmOpenWrite or fmShareDenyWrite)
-        else
-          LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
-        try
-          // Seek to end for appending
-          LStream.Seek(0, soEnd);
-          // Write all bytes
-          LAllBytes.Position := 0;
-          LStream.CopyFrom(LAllBytes, LAllBytes.Size);
-        finally
-          LStream.Free;
+          // Add details as separate TRACE line if present
+          if LEntry.Details <> '' then
+          begin
+            LLogLine := Format('[%s] [%s] [Thread:%d] %s',
+              [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
+               'TRACE',
+               LEntry.ThreadID,
+               LEntry.Details]) + sLineBreak;
+
+            LBytes := TEncoding.UTF8.GetBytes(LLogLine);
+            LAllBytes.WriteBuffer(LBytes[0], Length(LBytes));
+          end;
         end;
+
+        // Write all bytes in one operation
+        if LAllBytes.Size > 0 then
+        begin
+          try
+            if TFile.Exists(FLogFileName) then
+              LStream := TFileStream.Create(FLogFileName, fmOpenWrite or fmShareDenyWrite)
+            else
+              LStream := TFileStream.Create(FLogFileName, fmCreate or fmShareDenyWrite);
+            try
+              // Seek to end for appending
+              LStream.Seek(0, soEnd);
+              // Write all bytes
+              LAllBytes.Position := 0;
+              LStream.CopyFrom(LAllBytes, LAllBytes.Size);
+            finally
+              LStream.Free;
+            end;
+          except
+            // Silently ignore file I/O errors (e.g. permission problems)
+          end;
+        end;
+      finally
+        LAllBytes.Free;
       end;
-    finally
-      LAllBytes.Free;
+    except
+      // Logging system must never crash the application
     end;
   finally
     TMonitor.Exit(FLock);
@@ -348,6 +380,6 @@ end;
 initialization
   // Set defaults
   TFileLogProvider.FMaxFileSize := C_DEFAULT_MAX_FILE_SIZE;
-  TFileLogProvider.FLogFileName := ''; // Effective default : TPath.ChangeExtension(ParamStr(0), '.log')
+  TFileLogProvider.FLogFileName := ''; // Effective default: GetDefaultLogFileName
   TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
 end.
