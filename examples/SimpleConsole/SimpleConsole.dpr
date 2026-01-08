@@ -1,4 +1,5 @@
-﻿program SimpleConsole;
+program SimpleConsole;
+
 
 {$APPTYPE CONSOLE}
 
@@ -7,7 +8,8 @@
 uses
   System.SysUtils,
   DX.Logger in '..\..\source\DX.Logger.pas',
-  DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas';
+  DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas',
+  DX.Logger.Provider.Async in '..\..\source\DX.Logger.Provider.Async.pas';
 
 begin
   try
