@@ -67,10 +67,18 @@ begin
     WriteLn('Configuring Seq provider...');
     LoadConfigFromIni;
 
-    // Register Seq provider
+    // Register Seq provider - this automatically calls ValidateConnection
+    // because TSeqLogProvider implements ILogProviderValidation
+    WriteLn('Registering Seq provider (connection will be validated automatically)...');
     TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
     WriteLn('Seq provider registered.');
     WriteLn;
+
+    // Optional: You can also call ValidateConnection manually if needed,
+    // e.g., to re-validate after configuration changes or for testing:
+    //
+    // if not TSeqLogProvider.ValidateConnection then
+    //   WriteLn('WARNING: Seq connection validation failed!');
 
     // Simple logging examples
     WriteLn('Sending log messages to Seq...');

@@ -61,6 +61,12 @@ type
     procedure TestThreadSafety;
     [Test]
     procedure TestShutdown;
+    [Test]
+    procedure TestValidateConnectionWithoutUrl;
+    [Test]
+    procedure TestValidateConnectionWithInvalidUrl;
+    [Test]
+    procedure TestImplementsILogProviderValidation;
   end;
 
 implementation
@@ -404,6 +410,69 @@ begin
   Sleep(200);
 
   Assert.Pass('Provider shutdown completed without errors');
+end;
+
+procedure TSeqLogProviderTests.TestValidateConnectionWithoutUrl;
+var
+  LResult: Boolean;
+begin
+  // Register mock to capture error messages
+  TDXLogger.Instance.RegisterProvider(FMockCaptureIntf);
+  FMockCapture.Clear;
+
+  // Clear URL configuration
+  TSeqLogProvider.SetServerUrl('');
+
+  // Validate should fail and log an error
+  LResult := TSeqLogProvider.ValidateConnection;
+
+  Assert.IsFalse(LResult, 'ValidateConnection should return False when URL is not configured');
+
+  // Check that error was logged
+  Sleep(50);
+  Assert.IsTrue(FMockCapture.GetEntryCount > 0, 'Error should be logged');
+  Assert.AreEqual(TLogLevel.Error, FMockCapture.GetLastEntry.Level, 'Should log at Error level');
+  Assert.IsTrue(FMockCapture.GetLastEntry.Message.Contains('not configured'),
+    'Error message should mention URL not configured');
+
+  TDXLogger.Instance.UnregisterProvider(FMockCaptureIntf);
+end;
+
+procedure TSeqLogProviderTests.TestValidateConnectionWithInvalidUrl;
+var
+  LResult: Boolean;
+begin
+  // Register mock to capture error messages
+  TDXLogger.Instance.RegisterProvider(FMockCaptureIntf);
+  FMockCapture.Clear;
+
+  // Set an invalid URL that will fail to connect
+  TSeqLogProvider.SetServerUrl('http://invalid-host-that-does-not-exist.local');
+  TSeqLogProvider.SetApiKey('test-key');
+
+  // Validate should fail due to network error
+  LResult := TSeqLogProvider.ValidateConnection;
+
+  Assert.IsFalse(LResult, 'ValidateConnection should return False for invalid URL');
+
+  // Check that error was logged
+  Sleep(50);
+  Assert.IsTrue(FMockCapture.GetEntryCount > 0, 'Error should be logged');
+  Assert.AreEqual(TLogLevel.Error, FMockCapture.GetLastEntry.Level, 'Should log at Error level');
+
+  TDXLogger.Instance.UnregisterProvider(FMockCaptureIntf);
+end;
+
+procedure TSeqLogProviderTests.TestImplementsILogProviderValidation;
+var
+  LProvider: TSeqLogProvider;
+  LValidation: ILogProviderValidation;
+begin
+  LProvider := TSeqLogProvider.Instance;
+
+  // Test that provider implements ILogProviderValidation
+  Assert.IsTrue(Supports(LProvider, ILogProviderValidation, LValidation),
+    'TSeqLogProvider should implement ILogProviderValidation interface');
 end;
 
 initialization

@@ -44,7 +44,7 @@ The example demonstrates:
 
 1. **Loading configuration** from `config.local.ini`
 2. **Configuring the Seq provider** with server URL, API key, batch size, and flush interval
-3. **Registering the provider** with DX.Logger
+3. **Registering the provider** with DX.Logger (automatically validates the connection)
 4. **Logging messages** at different log levels (Trace, Debug, Info, Warn, Error)
 5. **Manual flushing** to ensure all messages are sent
 
@@ -57,6 +57,7 @@ DX.Logger Seq Provider Example
 Configuring Seq provider...
 Loading configuration from: Y:\DX.Logger\examples\SeqExample\Win32\Debug\config.local.ini
 Configuration loaded successfully.
+Registering Seq provider (connection will be validated automatically)...
 Seq provider registered.
 
 Sending log messages to Seq...
@@ -91,6 +92,18 @@ Press ENTER to exit...
 - Firewall blocking the connection
 
 Check the Seq server logs for more information.
+
+### Connection Validation Errors
+
+The `ValidateConnection` method provides detailed error messages:
+
+| Error Message | Cause | Solution |
+|--------------|-------|----------|
+| "Server URL is not configured" | URL is empty | Set the ServerUrl in config.local.ini |
+| "authentication failed (401/403)" | Invalid or missing API key | Check your API key in Seq and config.local.ini |
+| "API endpoint not found (404)" | Wrong URL or Seq not installed | Verify the server URL is correct |
+| "Network error: ..." | Server unreachable | Check network, firewall, and that Seq is running |
+| "Connection timeout" | Server too slow or unreachable | Check network connectivity and server load |
 
 ## See Also
 

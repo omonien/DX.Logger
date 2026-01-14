@@ -64,6 +64,23 @@ type
   end;
 
   /// <summary>
+  /// Optional interface for providers that support connection validation.
+  /// If a provider implements this interface, ValidateConnection will be called
+  /// automatically when the provider is registered with TDXLogger.
+  /// Providers should log success/failure information to help diagnose issues.
+  /// </summary>
+  ILogProviderValidation = interface
+    ['{A1B2C3D4-E5F6-4A5B-9C8D-7E6F5A4B3C2D}']
+    /// <summary>
+    /// Validates the provider's configuration and connection.
+    /// Called automatically after registration.
+    /// Should log success or detailed error information.
+    /// </summary>
+    /// <returns>True if validation succeeded, False otherwise</returns>
+    function ValidateConnection: Boolean;
+  end;
+
+  /// <summary>
   /// Core logger class (singleton)
   /// </summary>
   TDXLogger = class sealed
@@ -251,6 +268,8 @@ begin
 end;
 
 procedure TDXLogger.RegisterProvider(const AProvider: ILogProvider);
+var
+  LValidationProvider: ILogProviderValidation;
 begin
   TMonitor.Enter(Self);
   try
@@ -259,6 +278,10 @@ begin
   finally
     TMonitor.Exit(Self);
   end;
+
+  // Validate connection if provider implements ILogProviderValidation
+  if Supports(AProvider, ILogProviderValidation, LValidationProvider) then
+    LValidationProvider.ValidateConnection;
 end;
 
 procedure TDXLogger.UnregisterProvider(const AProvider: ILogProvider);

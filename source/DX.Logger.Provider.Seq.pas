@@ -37,7 +37,7 @@ type
   /// <summary>
   /// Seq-based log provider with asynchronous batching
   /// </summary>
-  TSeqLogProvider = class(TAsyncLogProvider)
+  TSeqLogProvider = class(TAsyncLogProvider, ILogProviderValidation)
   private
     class var FInstance: TSeqLogProvider;
     class var FServerUrl: string;
@@ -51,6 +51,9 @@ type
     procedure SendBatch(const ABatch: TArray<TLogEntry>);
     function LogLevelToSeqLevel(ALevel: TLogLevel): string;
     function FormatCLEF(const AEntry: TLogEntry): string;
+    // ILogProviderValidation implementation - calls class function
+    function DoValidateConnection: Boolean;
+    function ILogProviderValidation.ValidateConnection = DoValidateConnection;
   protected
     /// <summary>
     /// Write batch of log entries to Seq
@@ -109,6 +112,14 @@ type
     /// Cleanup on application exit
     /// </summary>
     class destructor Destroy;
+
+    /// <summary>
+    /// Validates the Seq server connection by sending a test request.
+    /// Logs success or detailed error information to help diagnose configuration issues.
+    /// Call this after configuring URL and API key to verify the connection works.
+    /// </summary>
+    /// <returns>True if connection is valid, False otherwise</returns>
+    class function ValidateConnection: Boolean;
   end;
 
 implementation
@@ -116,6 +127,7 @@ implementation
 uses
   System.SyncObjs,
   System.Net.HttpClient,
+  System.Net.URLClient,
   System.DateUtils,
   System.JSON;
 
@@ -383,6 +395,104 @@ begin
       end;
     finally
       LPayload.Free;
+    end;
+  finally
+    LHttpClient.Free;
+  end;
+end;
+
+function TSeqLogProvider.DoValidateConnection: Boolean;
+begin
+  // Delegate to class function
+  Result := ValidateConnection;
+end;
+
+class function TSeqLogProvider.ValidateConnection: Boolean;
+var
+  LHttpClient: THTTPClient;
+  LResponse: IHTTPResponse;
+  LUrl: string;
+  LApiKey: string;
+  LStatusCode: Integer;
+  LStatusText: string;
+begin
+  Result := False;
+
+  // Get current configuration (thread-safe)
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
+  TMonitor.Enter(FLock);
+  try
+    LUrl := FServerUrl;
+    LApiKey := FApiKey;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  // Check if URL is configured
+  if LUrl = '' then
+  begin
+    TDXLogger.Instance.Log('Seq configuration error: Server URL is not configured', TLogLevel.Error);
+    Exit;
+  end;
+
+  LHttpClient := THTTPClient.Create;
+  try
+    // Set reasonable timeout for validation
+    LHttpClient.ConnectionTimeout := 5000;  // 5 seconds
+    LHttpClient.ResponseTimeout := 10000;   // 10 seconds
+
+    // Set API key header if configured
+    if LApiKey <> '' then
+      LHttpClient.CustomHeaders['X-Seq-ApiKey'] := LApiKey;
+
+    try
+      // Use /api endpoint to check server availability
+      // This endpoint returns server info and validates API key
+      LResponse := LHttpClient.Get(LUrl + '/api');
+      LStatusCode := LResponse.StatusCode;
+      LStatusText := LResponse.StatusText;
+
+      case LStatusCode of
+        200:
+          begin
+            TDXLogger.Instance.Log(Format('Seq connection validated successfully - Server: %s', [LUrl]), TLogLevel.Info);
+            Result := True;
+          end;
+        401, 403:
+          begin
+            TDXLogger.Instance.Log(
+              Format('Seq authentication failed - Server: %s, Status: %d %s - Check your API key configuration',
+                [LUrl, LStatusCode, LStatusText]), TLogLevel.Error);
+          end;
+        404:
+          begin
+            TDXLogger.Instance.Log(
+              Format('Seq API endpoint not found - Server: %s, Status: %d %s - Verify the server URL is correct',
+                [LUrl, LStatusCode, LStatusText]), TLogLevel.Error);
+          end;
+      else
+        TDXLogger.Instance.Log(
+          Format('Seq connection failed - Server: %s, Status: %d %s',
+            [LUrl, LStatusCode, LStatusText]), TLogLevel.Error);
+      end;
+
+    except
+      on E: ENetHTTPClientException do
+      begin
+        // Network-level errors (connection refused, timeout, DNS failure, etc.)
+        TDXLogger.Instance.Log(
+          Format('Seq connection failed - Server: %s - Network error: %s',
+            [LUrl, E.Message]), TLogLevel.Error);
+      end;
+      on E: Exception do
+      begin
+        // Any other unexpected errors
+        TDXLogger.Instance.Log(
+          Format('Seq connection failed - Server: %s - Unexpected error (%s): %s',
+            [LUrl, E.ClassName, E.Message]), TLogLevel.Error);
+      end;
     end;
   finally
     LHttpClient.Free;
