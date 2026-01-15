@@ -6,6 +6,7 @@ uses
   System.SysUtils,
   System.IniFiles,
   DX.Logger in '..\..\source\DX.Logger.pas',
+  DX.Logger.Provider.Async in '..\..\source\DX.Logger.Provider.Async.pas',
   DX.Logger.Provider.Seq in '..\..\source\DX.Logger.Provider.Seq.pas';
 
 procedure LoadConfigFromIni;

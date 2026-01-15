@@ -70,6 +70,12 @@ type
     /// Log message (queued for async processing)
     /// </summary>
     procedure Log(const AEntry: TLogEntry);
+
+    /// <summary>
+    /// Flush all pending messages synchronously.
+    /// Blocks until all queued messages have been processed.
+    /// </summary>
+    procedure Flush;
   end;
 
 implementation
@@ -127,6 +133,19 @@ procedure TAsyncLogProvider.Log(const AEntry: TLogEntry);
 begin
   if not FShutdown then
     FPendingMessages.PushItem(AEntry);
+end;
+
+procedure TAsyncLogProvider.Flush;
+var
+  LTimeout: Integer;
+begin
+  // Wait for queue to drain (max 5 seconds)
+  LTimeout := 5000;
+  while (FPendingMessages.QueueSize > 0) and (LTimeout > 0) do
+  begin
+    Sleep(50);
+    Dec(LTimeout, 50);
+  end;
 end;
 
 procedure TAsyncLogProvider.WorkerThreadExecute;
