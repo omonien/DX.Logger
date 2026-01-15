@@ -7,7 +7,8 @@ uses
   System.IniFiles,
   DX.Logger in '..\..\source\DX.Logger.pas',
   DX.Logger.Provider.Async in '..\..\source\DX.Logger.Provider.Async.pas',
-  DX.Logger.Provider.Seq in '..\..\source\DX.Logger.Provider.Seq.pas';
+  DX.Logger.Provider.Seq in '..\..\source\DX.Logger.Provider.Seq.pas',
+  DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas';
 
 procedure LoadConfigFromIni;
 var
@@ -48,7 +49,14 @@ begin
   begin
     WriteLn('WARNING: config.local.ini not found at: ', LConfigFile);
     WriteLn('Using placeholder values (logging will not work).');
-    WriteLn('Please copy config.example.ini to config.local.ini and configure it.');
+    WriteLn;
+    WriteLn('Please create config.local.ini with the following structure:');
+    WriteLn;
+    WriteLn('  [Seq]');
+    WriteLn('  ServerUrl=https://your-seq-server.example.com');
+    WriteLn('  ApiKey=your-api-key-here');
+    WriteLn('  BatchSize=5');
+    WriteLn('  FlushInterval=1000');
     WriteLn;
     // Use placeholder values
     TSeqLogProvider.SetServerUrl('https://your-seq-server.example.com');
