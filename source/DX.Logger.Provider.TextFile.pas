@@ -59,6 +59,14 @@ type
     class procedure SetLogFileName(const AFileName: string);
 
     /// <summary>
+    /// Get current log file name
+    /// </summary>
+    /// <remarks>
+    /// Thread-safe operation protected by locks.
+    /// </remarks>
+    class function GetLogFileName: string;
+
+    /// <summary>
     /// Set maximum file size before rotation (default: 10 MB)
     /// </summary>
     /// <remarks>
@@ -265,6 +273,19 @@ begin
         // Logging system should not crash the application
       end;
     end;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+end;
+
+class function TFileLogProvider.GetLogFileName: string;
+begin
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
+  TMonitor.Enter(FLock);
+  try
+    Result := FLogFileName;
   finally
     TMonitor.Exit(FLock);
   end;
