@@ -1,4 +1,4 @@
-﻿unit DX.Logger.Provider.TextFile;
+unit DX.Logger.Provider.TextFile;
 
 {
   DX.Logger.Provider.TextFile - File logging provider for DX.Logger
@@ -242,7 +242,7 @@ begin
         LLogLine := Format('[%s] [WARN] [Thread:%d] Log file name changed from "%s" to "%s". ' +
           'Previous log file could not be renamed (Error: %s). Early log entries remain in: %s' + sLineBreak,
           [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', Now),
-           TThread.Current.ThreadID,
+           TThread.CurrentThread.ThreadID,
            LOldFileName,
            AFileName,
            LErrorMessage,
