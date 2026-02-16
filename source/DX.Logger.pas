@@ -76,8 +76,7 @@ type
     /// Called automatically after registration.
     /// Should log success or detailed error information.
     /// </summary>
-    /// <returns>True if validation succeeded, False otherwise</returns>
-    function ValidateConnection: Boolean;
+    procedure ValidateConnection;
   end;
 
   /// <summary>

@@ -30,6 +30,7 @@ uses
   System.SysUtils,
   System.Classes,
   System.Generics.Collections,
+  System.Threading,
   DX.Logger,
   DX.Logger.Provider.Async;
 
@@ -51,9 +52,9 @@ type
     procedure SendBatch(const ABatch: TArray<TLogEntry>);
     function LogLevelToSeqLevel(ALevel: TLogLevel): string;
     function FormatCLEF(const AEntry: TLogEntry): string;
-    // ILogProviderValidation implementation - calls class function
-    function DoValidateConnection: Boolean;
-    function ILogProviderValidation.ValidateConnection = DoValidateConnection;
+    // ILogProviderValidation implementation - calls class function in background
+    procedure DoValidateConnection;
+    procedure  ILogProviderValidation.ValidateConnection = DoValidateConnection;
   protected
     /// <summary>
     /// Write batch of log entries to Seq
@@ -401,10 +402,14 @@ begin
   end;
 end;
 
-function TSeqLogProvider.DoValidateConnection: Boolean;
+procedure TSeqLogProvider.DoValidateConnection;
 begin
-  // Delegate to class function
-  Result := ValidateConnection;
+  // Delegate to class function, run in background
+ TTask.Run(
+   procedure
+   begin
+    ValidateConnection;
+   end);
 end;
 
 class function TSeqLogProvider.ValidateConnection: Boolean;
