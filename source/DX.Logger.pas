@@ -41,7 +41,8 @@ type
     Debug,
     Info,
     Warn,
-    Error
+    Error,
+    None
   );
 
   /// <summary>
@@ -357,6 +358,7 @@ begin
     TLogLevel.Info:  Result := 'INFO';
     TLogLevel.Warn:  Result := 'WARN';
     TLogLevel.Error: Result := 'ERROR';
+    TLogLevel.None:  Result := 'NONE';
   else
     Result := 'UNKNOWN';
   end;
