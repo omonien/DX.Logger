@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-15
+
 ### Added
 - **`TLogEntry.MemoryInfo`**: new optional free-form string field. When a host registers `TDXLogger.Instance.MemoryInfoCallback`, every log entry carries a short memory snapshot (e.g. `"WS:45MB PB:22MB"`). Standard providers render it between `[Thread:N]` and the message; the Seq provider exposes it as a structured `MemoryInfo` field so it can be filtered and charted.
 - **`DX.Logger.MemoryInfo`**: new ready-to-use cross-platform unit. `EnableMemoryInfo` installs the callback with a cached `TProcessMemoryMonitor` (default 500 ms). Implementations: Windows (`GetProcessMemoryInfo`), macOS/iOS (`task_info`), Linux/Android (`/proc/self/status`). Unsupported platforms fall back to an empty snapshot so logging keeps running.
@@ -52,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration template system (config.example.ini)
 - Security policy and vulnerability reporting process
 
-[Unreleased]: https://github.com/omonien/DX.Logger/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/omonien/DX.Logger/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/omonien/DX.Logger/releases/tag/v1.1.0
 [1.0.0]: https://github.com/omonien/DX.Logger/releases/tag/v1.0.0
 
