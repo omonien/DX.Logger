@@ -385,11 +385,18 @@ begin
       try
         for LEntry in AEntries do
         begin
+          // Optional memory snippet right after [Thread:N] (e.g. "[WS:45MB PB:22MB] ").
+          // Empty when no MemoryInfoCallback is registered on TDXLogger.
+          var LMemSegment: string := '';
+          if LEntry.MemoryInfo <> '' then
+            LMemSegment := '[' + LEntry.MemoryInfo + '] ';
+
           // Format main log entry
-          LLogLine := Format('[%s] [%s] [Thread:%d] %s',
+          LLogLine := Format('[%s] [%s] [Thread:%d] %s%s',
             [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
              LogLevelToString(LEntry.Level),
              LEntry.ThreadID,
+             LMemSegment,
              LEntry.Message]) + sLineBreak;
 
           // Convert to bytes and add to stream
@@ -399,10 +406,11 @@ begin
           // Add details as separate TRACE line if present
           if LEntry.Details <> '' then
           begin
-            LLogLine := Format('[%s] [%s] [Thread:%d] %s',
+            LLogLine := Format('[%s] [%s] [Thread:%d] %s%s',
               [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
                'TRACE',
                LEntry.ThreadID,
+               LMemSegment,
                LEntry.Details]) + sLineBreak;
 
             LBytes := TEncoding.UTF8.GetBytes(LLogLine);

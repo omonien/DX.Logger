@@ -124,13 +124,20 @@ begin
 end;
 
 function TUILogProvider.FormatLogEntry(const AEntry: TLogEntry): string;
+var
+  LMemSegment: string;
 begin
-  // Thread-ID mitausgeben, konsistent mit dem TextFile-Provider —
-  // erleichtert das Zuordnen paralleler Requests in der UI-Log-Ansicht.
-  Result := Format('[%s] [%s] [Thread:%d] %s',
+  // Optional memory snippet right after [Thread:N], formatted consistently
+  // with the TextFile provider. Empty when MemoryInfoCallback is not set.
+  LMemSegment := '';
+  if AEntry.MemoryInfo <> '' then
+    LMemSegment := '[' + AEntry.MemoryInfo + '] ';
+
+  Result := Format('[%s] [%s] [Thread:%d] %s%s',
     [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', AEntry.Timestamp),
      LogLevelToString(AEntry.Level),
      AEntry.ThreadID,
+     LMemSegment,
      AEntry.Message]);
 end;
 
@@ -161,10 +168,14 @@ begin
         else
           LDetailsDisplay := LEntry.Details;
 
-        LMessages.Add(Format('[%s] [%s] [Thread:%d] %s',
+        var LTraceMemSegment: string := '';
+        if LEntry.MemoryInfo <> '' then
+          LTraceMemSegment := '[' + LEntry.MemoryInfo + '] ';
+        LMessages.Add(Format('[%s] [%s] [Thread:%d] %s%s',
           [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
            'TRACE',
            LEntry.ThreadID,
+           LTraceMemSegment,
            LDetailsDisplay]));
       end;
     end;

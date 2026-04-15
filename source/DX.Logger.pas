@@ -54,7 +54,23 @@ type
     Message: string;
     Details: string;    // Optional: Additional detail information (e.g., large JSON payloads)
     ThreadID: TThreadID;
+    /// <summary>
+    /// Optional: Short memory-pressure snapshot (e.g. "WS:45MB PB:22MB").
+    /// Filled by TDXLogger if a memory-info callback is registered via
+    /// TDXLogger.Instance.MemoryInfoCallback. Providers display the value
+    /// between ThreadID and message when non-empty. Kept free-form to
+    /// avoid binding DX.Logger to a specific memory library.
+    /// </summary>
+    MemoryInfo: string;
   end;
+
+  /// <summary>
+  /// Callback type used by TDXLogger to query a short memory-pressure
+  /// snapshot from the host application each time a log entry is produced.
+  /// Kept deliberately minimal so DX.Logger does not depend on any specific
+  /// process-memory library.
+  /// </summary>
+  TMemoryInfoCallback = reference to function: string;
 
   /// <summary>
   /// Interface for log providers
@@ -90,6 +106,7 @@ type
     class var FLock: TObject;
   private
     FProviders: TList<ILogProvider>;
+    FMemoryInfoCallback: TMemoryInfoCallback;
 
     constructor Create;
     class constructor Create;
@@ -121,6 +138,15 @@ type
     /// Set minimum log level (messages below this level are ignored)
     /// </summary>
     class procedure SetMinLevel(ALevel: TLogLevel);
+
+    /// <summary>
+    /// Optional callback that returns a short memory-pressure snapshot.
+    /// When set, the result is attached to every TLogEntry as MemoryInfo
+    /// and rendered by the standard providers between thread-id and message.
+    /// Assign nil to disable. Host applications are responsible for keeping
+    /// the callback cheap (caching recommended) since it runs per log entry.
+    /// </summary>
+    property MemoryInfoCallback: TMemoryInfoCallback read FMemoryInfoCallback write FMemoryInfoCallback;
   end;
 
 /// <summary>
@@ -174,13 +200,21 @@ type
 procedure TDefaultLogProvider.Log(const AEntry: TLogEntry);
 var
   LFormattedMessage: string;
+  LMemSegment: string;
   {$IFDEF ANDROID}
   LMarshaller: TMarshaller;
   {$ENDIF}
 begin
-  LFormattedMessage := Format('[%s] [%s] %s',
+  // Optional memory snippet right after [Thread:N] (empty when no callback).
+  LMemSegment := '';
+  if AEntry.MemoryInfo <> '' then
+    LMemSegment := '[' + AEntry.MemoryInfo + '] ';
+
+  LFormattedMessage := Format('[%s] [%s] [Thread:%d] %s%s',
     [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', AEntry.Timestamp),
      LogLevelToString(AEntry.Level),
+     AEntry.ThreadID,
+     LMemSegment,
      AEntry.Message]);
 
   {$IFDEF CONSOLE}
@@ -308,6 +342,16 @@ begin
   LEntry.Message := AMessage;
   LEntry.Details := ADetails;
   LEntry.ThreadID := TThread.CurrentThread.ThreadID;
+  LEntry.MemoryInfo := '';
+  if Assigned(FMemoryInfoCallback) then
+  begin
+    try
+      LEntry.MemoryInfo := FMemoryInfoCallback();
+    except
+      // A broken callback must never break logging — swallow silently.
+      LEntry.MemoryInfo := '';
+    end;
+  end;
 
   TMonitor.Enter(Self);
   try

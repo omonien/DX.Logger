@@ -330,6 +330,12 @@ begin
     LJson.AddPair('@m', AEntry.Message);
     LJson.AddPair('ThreadId', TJSONNumber.Create(AEntry.ThreadID));
 
+    // Add memory-pressure snapshot if the host provided one via
+    // TDXLogger.MemoryInfoCallback. Exposed as its own structured field so
+    // Seq queries can filter/aggregate on it without string-parsing @m.
+    if AEntry.MemoryInfo <> '' then
+      LJson.AddPair('MemoryInfo', AEntry.MemoryInfo);
+
     // Add details if present
     if AEntry.Details <> '' then
       LJson.AddPair('Details', AEntry.Details);
