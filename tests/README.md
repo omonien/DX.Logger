@@ -31,6 +31,24 @@ DX.Logger.Tests.exe
 - **TestConvenienceFunctions**: Tests DXLogTrace, DXLogDebug, etc.
 - **TestLogLevelToString**: Tests log level string conversion
 - **TestThreadSafety**: Validates thread-safe logging with multiple threads
+- **TestMemoryInfoDefaultEmpty**: Without a callback, TLogEntry.MemoryInfo is empty
+- **TestMemoryInfoCallbackPopulatesEntry**: Registered callback result is attached to every entry
+- **TestMemoryInfoCallbackClearedByNil**: Assigning nil removes the callback again
+- **TestMemoryInfoCallbackExceptionSwallowed**: A raising callback must not break logging
+
+### MemoryInfo Tests (`DX.Logger.Tests.MemoryInfo.pas`)
+
+Tests for the ready-to-use `DX.Logger.MemoryInfo` unit (cross-platform).
+
+- **TestIsSupportedOnThisPlatform**: `IsSupported` matches the compile-time platform
+- **TestSnapshotHasPlausibleValues**: Fresh snapshot has non-zero values on supported platforms
+- **TestShortStringFormat**: `ToShortString` renders `"WS:45MB PB:22MB"`
+- **TestDisplayStringFormat**: `ToDisplayString` renders the full readable form
+- **TestCachingSuppressesRepeatedQueries**: GetSnapshot reuses the cached value within the window
+- **TestFreshSnapshotBypassesCache**: GetFreshSnapshot re-queries and updates the cache
+- **TestEnableMemoryInfoInstallsCallback**: `EnableMemoryInfo` installs the callback on TDXLogger
+- **TestDisableMemoryInfoRemovesCallback**: `DisableMemoryInfo` removes it again
+- **TestEnabledCallbackProducesPattern**: End-to-end check of the `WS:…MB PB:…MB` shape
 
 ### File Provider Tests (`DX.Logger.Tests.FileProvider.pas`)
 

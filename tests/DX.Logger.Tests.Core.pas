@@ -55,6 +55,14 @@ type
     procedure TestLogLevelToString;
     [Test]
     procedure TestThreadSafety;
+    [Test]
+    procedure TestMemoryInfoDefaultEmpty;
+    [Test]
+    procedure TestMemoryInfoCallbackPopulatesEntry;
+    [Test]
+    procedure TestMemoryInfoCallbackClearedByNil;
+    [Test]
+    procedure TestMemoryInfoCallbackExceptionSwallowed;
   end;
 
 implementation
@@ -302,6 +310,101 @@ begin
 
   Assert.AreEqual(LExpectedTotal, FMockProvider.GetEntryCount,
     'All messages from all threads should be logged');
+end;
+
+{ Memory-Info callback tests }
+
+// Baseline: without a callback set, MemoryInfo on new entries is empty.
+procedure TDXLoggerTests.TestMemoryInfoDefaultEmpty;
+var
+  LEntry: TLogEntry;
+begin
+  TDXLogger.Instance.MemoryInfoCallback := nil;
+  FMockProvider.Clear;
+  DXLog('no-memory-info');
+  Assert.AreEqual(1, FMockProvider.GetEntryCount);
+  LEntry := FMockProvider.GetLastEntry;
+  Assert.AreEqual('', LEntry.MemoryInfo,
+    'MemoryInfo should be empty when no callback is installed');
+end;
+
+// A registered callback's result is attached to every subsequent entry.
+procedure TDXLoggerTests.TestMemoryInfoCallbackPopulatesEntry;
+var
+  LEntry: TLogEntry;
+begin
+  TDXLogger.Instance.MemoryInfoCallback :=
+    function: string
+    begin
+      Result := 'WS:42MB PB:17MB';
+    end;
+  try
+    FMockProvider.Clear;
+    DXLog('with-memory-info');
+    Assert.AreEqual(1, FMockProvider.GetEntryCount);
+    LEntry := FMockProvider.GetLastEntry;
+    Assert.AreEqual('WS:42MB PB:17MB', LEntry.MemoryInfo,
+      'MemoryInfo should carry the callback result');
+  finally
+    TDXLogger.Instance.MemoryInfoCallback := nil;
+  end;
+end;
+
+// Assigning nil removes the callback; later entries carry no memory info.
+procedure TDXLoggerTests.TestMemoryInfoCallbackClearedByNil;
+var
+  LCount: Integer;
+  LEntry: TLogEntry;
+begin
+  LCount := 0;
+  TDXLogger.Instance.MemoryInfoCallback :=
+    function: string
+    begin
+      Inc(LCount);
+      Result := 'CALL-' + LCount.ToString;
+    end;
+  try
+    FMockProvider.Clear;
+    DXLog('first');
+    DXLog('second');
+    Assert.AreEqual(2, LCount, 'Callback should be invoked per log entry');
+    Assert.AreEqual('CALL-1', FMockProvider.GetEntry(0).MemoryInfo);
+    Assert.AreEqual('CALL-2', FMockProvider.GetEntry(1).MemoryInfo);
+
+    TDXLogger.Instance.MemoryInfoCallback := nil;
+    FMockProvider.Clear;
+    DXLog('third');
+    Assert.AreEqual(2, LCount, 'Callback must not be called after nil-assignment');
+    LEntry := FMockProvider.GetLastEntry;
+    Assert.AreEqual('', LEntry.MemoryInfo,
+      'After nil-assignment entries must not carry MemoryInfo');
+  finally
+    TDXLogger.Instance.MemoryInfoCallback := nil;
+  end;
+end;
+
+// A misbehaving callback must never break logging — MemoryInfo falls back
+// to empty, the entry itself still reaches all providers.
+procedure TDXLoggerTests.TestMemoryInfoCallbackExceptionSwallowed;
+var
+  LEntry: TLogEntry;
+begin
+  TDXLogger.Instance.MemoryInfoCallback :=
+    function: string
+    begin
+      raise Exception.Create('boom');
+    end;
+  try
+    FMockProvider.Clear;
+    DXLog('callback-raises');
+    Assert.AreEqual(1, FMockProvider.GetEntryCount,
+      'Entry must still be logged even if the memory callback raises');
+    LEntry := FMockProvider.GetLastEntry;
+    Assert.AreEqual('', LEntry.MemoryInfo,
+      'On callback failure MemoryInfo must fall back to empty');
+  finally
+    TDXLogger.Instance.MemoryInfoCallback := nil;
+  end;
 end;
 
 initialization

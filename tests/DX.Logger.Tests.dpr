@@ -15,12 +15,14 @@ uses
   {$ENDIF }
   DUnitX.TestFramework,
   DX.Logger in '..\source\DX.Logger.pas',
+  DX.Logger.MemoryInfo in '..\source\DX.Logger.MemoryInfo.pas',
   DX.Logger.Provider.Async in '..\source\DX.Logger.Provider.Async.pas',
   DX.Logger.Provider.TextFile in '..\source\DX.Logger.Provider.TextFile.pas',
   DX.Logger.Provider.Seq in '..\source\DX.Logger.Provider.Seq.pas',
   DX.Logger.Tests.Core in 'DX.Logger.Tests.Core.pas',
   DX.Logger.Tests.FileProvider in 'DX.Logger.Tests.FileProvider.pas',
-  DX.Logger.Tests.SeqProvider in 'DX.Logger.Tests.SeqProvider.pas';
+  DX.Logger.Tests.SeqProvider in 'DX.Logger.Tests.SeqProvider.pas',
+  DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas';
 
 {$IFNDEF TESTINSIGHT}
 var

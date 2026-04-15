@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log line format across all standard providers is now consistent:
   `[timestamp] [LEVEL] [Thread:N]` optionally followed by `[MemoryInfo]`, then the message. Any custom provider that formatted entries itself (via `AEntry.Message`) keeps working unchanged.
 
+### Tests
+- 13 new tests covering the memory-info feature: 4 for the core callback hook (`TestMemoryInfoDefaultEmpty`, `TestMemoryInfoCallbackPopulatesEntry`, `TestMemoryInfoCallbackClearedByNil`, `TestMemoryInfoCallbackExceptionSwallowed`) and 9 for `DX.Logger.MemoryInfo` (`IsSupported`, snapshot values, short/display formatting, caching vs. fresh, enable/disable lifecycle, end-to-end pattern check).
+
 ## [1.0.0] - 2025-11-18
 
 ### Added
