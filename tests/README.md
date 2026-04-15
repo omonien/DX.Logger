@@ -57,6 +57,7 @@ Tests for the ready-to-use `DX.Logger.MemoryInfo` unit (cross-platform).
 - **TestFileRotation**: Validates automatic file rotation
 - **TestCustomFileName**: Tests custom log file names
 - **TestDirectoryCreation**: Tests automatic directory creation
+- **TestThreadSafety**: 10 worker threads × 50 messages each — verifies async batching writes all 500 entries (uses TLoggingWorker subclass + Flush() to be deterministic)
 - **TestThreadSafety**: Validates thread-safe file writing
 
 ## Test Framework

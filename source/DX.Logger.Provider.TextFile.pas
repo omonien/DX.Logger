@@ -90,6 +90,9 @@ implementation
 uses
   System.IOUtils,
   System.SyncObjs
+  {$IFDEF MSWINDOWS}
+  , Winapi.Windows  // OutputDebugString for drop-report (see WriteBatch)
+  {$ENDIF}
   {$IF Defined(IOS)}
   , iOSapi.Foundation
   , Macapi.Helpers
@@ -149,6 +152,12 @@ end;
 
 const
   C_DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+  /// <summary>Number of attempts to open the log file per batch before
+  /// giving up. Short-lived share-violations are common under concurrency.
+  /// </summary>
+  C_WRITE_RETRY_COUNT = 10;
+  /// <summary>Back-off between retries in milliseconds.</summary>
+  C_WRITE_RETRY_DELAY_MS = 5;
 
 { TFileLogProvider }
 
@@ -205,6 +214,12 @@ var
 begin
   if not Assigned(FLock) then
     FLock := TObject.Create;
+
+  // Drain any pending writes against the previous filename before we change
+  // it, so log entries cannot bleed from the old file's queue into the new
+  // file (or vanish during rename). Safe to call when no instance exists yet.
+  if Assigned(FInstance) then
+    FInstance.Flush;
 
   TMonitor.Enter(FLock);
   try
@@ -317,7 +332,9 @@ begin
   try
     LFileSize := LSearchRec.Size;
   finally
-    FindClose(LSearchRec);
+    // Fully-qualified: Winapi.Windows also declares FindClose(Handle)
+    // and would be picked up after the uses clause added Winapi.Windows.
+    System.SysUtils.FindClose(LSearchRec);
   end;
 
   // Check if rotation is needed
@@ -418,31 +435,73 @@ begin
           end;
         end;
 
-        // Write all bytes in one operation
+        // Write all bytes in one operation.
+        // Retry on transient file-share conflicts (can happen when another
+        // thread or process opened the file with fmShareDenyWrite briefly).
+        // After all retries we surface the failure on OutputDebugString /
+        // stderr so it is visible, instead of silently dropping entries.
         if LAllBytes.Size > 0 then
         begin
-          try
-            {$IFDEF MSWINDOWS}
-            LShareMode := fmShareDenyWrite;
-            {$ELSE}
-            LShareMode := fmShareDenyNone;
-            {$ENDIF}
-            LOpenMode := fmOpenReadWrite or LShareMode;
-            if TFile.Exists(FLogFileName) then
-              LStream := TFileStream.Create(FLogFileName, LOpenMode)
-            else
-              LStream := TFileStream.Create(FLogFileName, fmCreate or LShareMode);
+          {$IFDEF MSWINDOWS}
+          LShareMode := fmShareDenyWrite;
+          {$ELSE}
+          LShareMode := fmShareDenyNone;
+          {$ENDIF}
+          LOpenMode := fmOpenReadWrite or LShareMode;
+
+          var LSucceeded: Boolean := False;
+          var LLastError: string := '';
+          var LAttempt: Integer;
+          for LAttempt := 1 to C_WRITE_RETRY_COUNT do
+          begin
             try
-              // Seek to end for appending
-              LStream.Seek(0, soEnd);
-              // Write all bytes
-              LAllBytes.Position := 0;
-              LStream.CopyFrom(LAllBytes, LAllBytes.Size);
-            finally
-              LStream.Free;
+              if TFile.Exists(FLogFileName) then
+                LStream := TFileStream.Create(FLogFileName, LOpenMode)
+              else
+                LStream := TFileStream.Create(FLogFileName, fmCreate or LShareMode);
+              try
+                LStream.Seek(0, soEnd);
+                LAllBytes.Position := 0;
+                LStream.CopyFrom(LAllBytes, LAllBytes.Size);
+              finally
+                LStream.Free;
+              end;
+              LSucceeded := True;
+              Break;
+            except
+              on E: Exception do
+              begin
+                LLastError := E.ClassName + ': ' + E.Message;
+                // Short back-off before the next attempt
+                if LAttempt < C_WRITE_RETRY_COUNT then
+                  Sleep(C_WRITE_RETRY_DELAY_MS);
+              end;
             end;
-          except
-            // Silently ignore file I/O errors (e.g. permission problems)
+          end;
+
+          // After all retries failed, surface the problem via a channel that
+          // cannot recurse into this provider: OutputDebugString on Windows,
+          // stderr otherwise. Logging itself must never crash the app, so
+          // everything here is still wrapped defensively.
+          if not LSucceeded then
+          begin
+            try
+              var LReport: string := Format(
+                '[DX.Logger] TFileLogProvider dropped batch of %d bytes for "%s" ' +
+                'after %d attempts: %s',
+                [LAllBytes.Size, FLogFileName, C_WRITE_RETRY_COUNT, LLastError]);
+              {$IFDEF MSWINDOWS}
+              OutputDebugString(PChar(LReport));
+              {$ELSE}
+              try
+                Writeln(ErrOutput, LReport);
+              except
+                // stderr unavailable (e.g. headless/GUI apps) — give up quietly
+              end;
+              {$ENDIF}
+            except
+              // never rethrow from a logger
+            end;
           end;
         end;
       finally

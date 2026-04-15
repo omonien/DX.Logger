@@ -39,7 +39,12 @@ type
     FPendingMessages: TThreadedQueue<TLogEntry>;
     FWorkerThread: TThread;
     FShutdown: Boolean;
-    
+    /// <summary>Counts log entries that have been pushed into the queue but
+    /// not yet written by the worker. Decremented after each successful
+    /// WriteBatch. Used by Flush to wait for true drain (queue empty AND
+    /// in-flight batch written), not just queue empty.</summary>
+    FInFlightCount: Integer;
+
     procedure WorkerThreadExecute;
   protected
     /// <summary>
@@ -132,19 +137,25 @@ end;
 procedure TAsyncLogProvider.Log(const AEntry: TLogEntry);
 begin
   if not FShutdown then
+  begin
+    TInterlocked.Increment(FInFlightCount);
     FPendingMessages.PushItem(AEntry);
+  end;
 end;
 
 procedure TAsyncLogProvider.Flush;
 var
   LTimeout: Integer;
 begin
-  // Wait for queue to drain (max 5 seconds)
+  // Wait until both the queue is empty AND the worker has finished
+  // writing the in-flight batch. FInFlightCount counts every Log() push
+  // and is decremented after a successful WriteBatch — so reaching zero
+  // means "everything pushed up to this point is on disk".
   LTimeout := 5000;
-  while (FPendingMessages.QueueSize > 0) and (LTimeout > 0) do
+  while (FInFlightCount > 0) and (LTimeout > 0) do
   begin
-    Sleep(50);
-    Dec(LTimeout, 50);
+    Sleep(10);
+    Dec(LTimeout, 10);
   end;
 end;
 
@@ -178,11 +189,16 @@ begin
          ((MilliSecondsBetween(Now, LLastFlush) >= GetFlushInterval) or
           (LBatch.Count >= GetBatchSize)) then
       begin
+        var LBatchSize: Integer := LBatch.Count;
         try
           WriteBatch(LBatch.ToArray);
         except
           // Silently ignore errors in WriteBatch to prevent thread crash
         end;
+        // Decrement in-flight regardless of WriteBatch outcome — Flush() must
+        // not deadlock if a single batch fails. The batch itself logs/reports
+        // its own failure via the concrete provider.
+        TInterlocked.Add(FInFlightCount, -LBatchSize);
         LBatch.Clear;
         LLastFlush := Now;
       end;
@@ -191,11 +207,13 @@ begin
     // Final flush on shutdown
     if LBatch.Count > 0 then
     begin
+      var LBatchSize: Integer := LBatch.Count;
       try
         WriteBatch(LBatch.ToArray);
       except
         // Silently ignore errors during shutdown
       end;
+      TInterlocked.Add(FInFlightCount, -LBatchSize);
     end;
   finally
     LBatch.Free;

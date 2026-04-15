@@ -19,8 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log line format across all standard providers is now consistent:
   `[timestamp] [LEVEL] [Thread:N]` optionally followed by `[MemoryInfo]`, then the message. Any custom provider that formatted entries itself (via `AEntry.Message`) keeps working unchanged.
 
+### Fixed
+- **`TFileLogProvider`** silently dropped batches when the file was briefly held by another thread or process (old code had a swallow-everything `except`). Replaced with a 10×5 ms retry loop. If all retries fail, the drop is reported via `OutputDebugString` (Windows) / `stderr` (other platforms) so the failure is visible — never recursing back into the logger.
+- **`TFileLogProvider.SetLogFileName`** now flushes pending writes against the previous filename before switching. Prevents log entries from bleeding between files when the host changes the log target while the async worker is mid-batch.
+- **`TAsyncLogProvider.Flush`** now waits for true drain (queue empty *and* in-flight batch written) using an interlocked counter, instead of just polling `QueueSize`. Previously a flush could return while the worker was still inside `WriteBatch`, losing a few entries to a race between `Flush` and a subsequent `Delete`/rotation.
+
 ### Tests
 - 13 new tests covering the memory-info feature: 4 for the core callback hook (`TestMemoryInfoDefaultEmpty`, `TestMemoryInfoCallbackPopulatesEntry`, `TestMemoryInfoCallbackClearedByNil`, `TestMemoryInfoCallbackExceptionSwallowed`) and 9 for `DX.Logger.MemoryInfo` (`IsSupported`, snapshot values, short/display formatting, caching vs. fresh, enable/disable lifecycle, end-to-end pattern check).
+- `TFileLogProviderTests.TestThreadSafety` rewritten to use a real `TThread` subclass with per-instance fields. The previous closure over the for-loop variable captured by reference, so all worker threads ran with the post-loop index — masquerading as a "logger loses entries" defect. With the rewrite plus the `Flush` fix above the test is now stable across consecutive runs (verified 5×).
 
 ## [1.0.0] - 2025-11-18
 

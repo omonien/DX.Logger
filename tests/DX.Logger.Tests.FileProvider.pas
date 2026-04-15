@@ -194,6 +194,30 @@ begin
   Assert.IsTrue(TFile.Exists(LFileInSubDir), 'Log file in subdirectory should be created');
 end;
 
+type
+  TLoggingWorker = class(TThread)
+  public
+    WorkerIndex: Integer;            // public fields, set after construction
+    WorkerMessagesPerThread: Integer; // before Start — race-free.
+  protected
+    procedure Execute; override;
+  end;
+
+procedure TLoggingWorker.Execute;
+var
+  j: Integer;
+  LEntry: TLogEntry;
+begin
+  for j := 1 to WorkerMessagesPerThread do
+  begin
+    LEntry.Timestamp := Now;
+    LEntry.Level := TLogLevel.Info;
+    LEntry.Message := Format('Thread %d Message %d', [WorkerIndex + 1, j]);
+    LEntry.ThreadID := Winapi.Windows.GetCurrentThreadId;
+    TFileLogProvider.Instance.Log(LEntry);
+  end;
+end;
+
 procedure TFileLogProviderTests.TestThreadSafety;
 var
   LThreadCount: Integer;
@@ -202,11 +226,18 @@ var
   LLineCount: Integer;
   LExpectedCount: Integer;
   LThreads: array of TThread;
+  LWorker: TLoggingWorker;
   i: Integer;
 begin
   TFileLogProvider.SetLogFileName(FTestLogFile);
   // Set a very large max file size to prevent rotation during this test
   TFileLogProvider.SetMaxFileSize(100 * 1024 * 1024); // 100 MB
+
+  // Drain the async worker so leftovers from a previous test cannot leak
+  // into our line count, and start with a fresh empty file.
+  TFileLogProvider.Instance.Flush;
+  if TFile.Exists(FTestLogFile) then
+    TFile.Delete(FTestLogFile);
 
   LThreadCount := 10;
   LMessagesPerThread := 50;
@@ -214,28 +245,18 @@ begin
 
   SetLength(LThreads, LThreadCount);
 
-  // Create and start all threads
+  // Use a dedicated TThread subclass to carry the per-worker index as a
+  // proper field. Closures over the for-loop variable capture by reference
+  // in Delphi and would cause every worker to read the same (post-loop)
+  // index — which masked as a "logger loses entries" bug before.
   for i := 0 to LThreadCount - 1 do
   begin
-    LThreads[i] := TThread.CreateAnonymousThread(
-      procedure
-      var
-        j: Integer;
-        LEntry: TLogEntry;
-        LThreadIndex: Integer;
-      begin
-        LThreadIndex := i + 1; // Capture thread index
-        for j := 1 to LMessagesPerThread do
-        begin
-          LEntry.Timestamp := Now;
-          LEntry.Level := TLogLevel.Info;
-          LEntry.Message := Format('Thread %d Message %d', [LThreadIndex, j]);
-          LEntry.ThreadID := Winapi.Windows.GetCurrentThreadId;
-          TFileLogProvider.Instance.Log(LEntry);
-        end;
-      end);
-    LThreads[i].FreeOnTerminate := False;
-    LThreads[i].Start;
+    LWorker := TLoggingWorker.Create(True); // suspended, default ctor
+    LWorker.WorkerIndex := i;
+    LWorker.WorkerMessagesPerThread := LMessagesPerThread;
+    LWorker.FreeOnTerminate := False;
+    LThreads[i] := LWorker;
+    LWorker.Start;
   end;
 
   // Wait for all threads to complete
@@ -245,8 +266,11 @@ begin
     LThreads[i].Free;
   end;
 
-  // Give async worker thread time to write all batches
-  Sleep(500);
+  // Block until the async worker has drained the queue. The async provider
+  // batches writes every 100ms; at 500 entries this can easily exceed the
+  // old 500ms Sleep, causing the last batch to still be pending when the
+  // assertion runs. Flush waits up to 5 seconds for QueueSize to reach 0.
+  TFileLogProvider.Instance.Flush;
 
   Assert.IsTrue(TFile.Exists(FTestLogFile), 'Log file should exist');
 
