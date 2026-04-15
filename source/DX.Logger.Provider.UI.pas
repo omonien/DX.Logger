@@ -125,9 +125,12 @@ end;
 
 function TUILogProvider.FormatLogEntry(const AEntry: TLogEntry): string;
 begin
-  Result := Format('[%s] [%s] %s',
+  // Thread-ID mitausgeben, konsistent mit dem TextFile-Provider —
+  // erleichtert das Zuordnen paralleler Requests in der UI-Log-Ansicht.
+  Result := Format('[%s] [%s] [Thread:%d] %s',
     [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', AEntry.Timestamp),
      LogLevelToString(AEntry.Level),
+     AEntry.ThreadID,
      AEntry.Message]);
 end;
 
@@ -158,9 +161,10 @@ begin
         else
           LDetailsDisplay := LEntry.Details;
 
-        LMessages.Add(Format('[%s] [%s] %s',
+        LMessages.Add(Format('[%s] [%s] [Thread:%d] %s',
           [FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', LEntry.Timestamp),
            'TRACE',
+           LEntry.ThreadID,
            LDetailsDisplay]));
       end;
     end;
