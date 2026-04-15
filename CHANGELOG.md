@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`TLogEntry.MemoryInfo`**: new optional free-form string field. When a host registers `TDXLogger.Instance.MemoryInfoCallback`, every log entry carries a short memory snapshot (e.g. `"WS:45MB PB:22MB"`). Standard providers render it between `[Thread:N]` and the message; the Seq provider exposes it as a structured `MemoryInfo` field so it can be filtered and charted.
+- **`DX.Logger.MemoryInfo`**: new ready-to-use cross-platform unit. `EnableMemoryInfo` installs the callback with a cached `TProcessMemoryMonitor` (default 500 ms). Implementations: Windows (`GetProcessMemoryInfo`), macOS/iOS (`task_info`), Linux/Android (`/proc/self/status`). Unsupported platforms fall back to an empty snapshot so logging keeps running.
+- **Thread-ID in UI provider**: `TUILogProvider` now renders `[Thread:N]` just like the File and Seq providers. Previously the UI line omitted the thread-id, which made parallel work hard to follow in live log views.
+- **Thread-ID in default provider**: `TDefaultLogProvider` (`OutputDebugString` / `WriteLn` / `NSLog` / `syslog` / Android log) now also renders `[Thread:N]` for consistency across all outputs.
+
+### Changed
+- Log line format across all standard providers is now consistent:
+  `[timestamp] [LEVEL] [Thread:N]` optionally followed by `[MemoryInfo]`, then the message. Any custom provider that formatted entries itself (via `AEntry.Message`) keeps working unchanged.
+
 ## [1.0.0] - 2025-11-18
 
 ### Added

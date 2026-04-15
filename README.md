@@ -19,6 +19,8 @@ A minimalistic, cross-platform logging library for Delphi with a simple API and 
   - Linux: `syslog`
 - **Provider Architecture**: Easily extend with custom log targets
 - **Thread-Safe**: Safe for use in multi-threaded applications
+- **Thread-ID in every entry**: Standard providers (File, UI, Seq, Default) render `[Thread:N]` next to the log level so parallel work is easy to follow
+- **Optional Memory-Pressure Snippet**: Opt-in via `DX.Logger.MemoryInfo` — providers render a short `[WS:45MB PB:22MB]` block between thread-id and message; perfect for spotting memory growth in long-running services
 - **Single-Unit Core**: Minimal dependencies
 
 ## Installation
@@ -219,6 +221,58 @@ TUILogProvider.Instance.ExternalStrings := nil;
 
 **Details Handling**: When log entries include details, the UI provider writes them as a separate TRACE-level line. To prevent UI overflow with large details (e.g., JSON payloads, stack traces), details are truncated to 50 characters with a continuation message: `"... [see log file for details]"`. This keeps the UI readable while preserving full details in file logs.
 
+## Optional: Memory-Pressure in Log Entries
+
+For long-running services it is often useful to see the current process memory right in the log stream without building a custom tool chain. `DX.Logger.MemoryInfo` provides a cross-platform ready-to-use implementation that you can enable with a single line.
+
+```delphi
+uses
+  DX.Logger,
+  DX.Logger.MemoryInfo;
+
+begin
+  EnableMemoryInfo;              // default 500 ms cache
+  // or: EnableMemoryInfo(1000); // custom cache interval in ms
+  ...
+end.
+```
+
+From that moment on every log entry gets a short memory snippet attached, and the standard providers render it between `[Thread:N]` and the message:
+
+```
+[2026-04-15 11:30:50.090] [INFO] [Thread:5944] [WS:37MB PB:16MB] Request received
+```
+
+- `WS` = Working Set (resident memory)
+- `PB` = Private Bytes / virtual size
+
+The snapshot is cached (default 500 ms) so high-frequency log calls stay cheap. The Seq provider exposes it as a structured `MemoryInfo` field (not inside `@m`) so it is queryable and chart-able.
+
+### Platform coverage
+
+| Platform        | Source                              |
+|-----------------|-------------------------------------|
+| Windows         | `GetProcessMemoryInfo` (PSAPI)      |
+| macOS / iOS     | `task_info(MACH_TASK_BASIC_INFO)`   |
+| Linux / Android | `/proc/self/status` (`VmRSS`, `VmSize`) |
+| Other           | Returns empty snapshot; logging continues unaffected |
+
+`TProcessMemoryMonitor.IsSupported` tells you at runtime whether the current platform has a real implementation.
+
+### Under the hood
+
+`EnableMemoryInfo` is a thin wrapper that installs a `TDXLogger.MemoryInfoCallback` pointing at `TProcessMemoryMonitor.GetSnapshot.ToShortString`. If you need full control (e.g. supply the snapshot from FastMM4 counters, mock it in tests, or add extra fields), assign your own callback directly:
+
+```delphi
+TDXLogger.Instance.MemoryInfoCallback :=
+  function: string
+  begin
+    Result := 'Heap:' + IntToStr(MyHeapBytes div 1048576) + 'MB';
+  end;
+```
+
+DX.Logger itself has no dependency on any specific memory library — it just asks for a string. Call `DisableMemoryInfo` or assign `nil` to remove the callback again.
+
 ## Creating Custom Providers
 
 You can create custom log providers by implementing the `ILogProvider` interface:
@@ -232,8 +286,13 @@ type
 
 procedure TMyCustomProvider.Log(const AEntry: TLogEntry);
 begin
-  // Your custom logging logic here
-  // AEntry contains: Timestamp, Level, Message, ThreadID
+  // Your custom logging logic here. AEntry contains:
+  //   Timestamp  : TDateTime
+  //   Level      : TLogLevel
+  //   Message    : string
+  //   Details    : string   (optional, e.g. large JSON payload)
+  //   ThreadID   : TThreadID
+  //   MemoryInfo : string   (optional, set when a MemoryInfoCallback is installed)
 end;
 
 // Register your provider
@@ -306,6 +365,7 @@ DX.Logger.Tests.exe
 DX.Logger/
 ├── source/
 │   ├── DX.Logger.pas                     # Core logger unit
+│   ├── DX.Logger.MemoryInfo.pas          # Optional: cross-platform memory-pressure snippet
 │   ├── DX.Logger.Provider.TextFile.pas   # File logging provider
 │   ├── DX.Logger.Provider.Seq.pas        # Seq logging provider
 │   └── DX.Logger.Provider.UI.pas         # UI logging provider
