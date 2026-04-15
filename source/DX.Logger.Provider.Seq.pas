@@ -31,6 +31,7 @@ uses
   System.Classes,
   System.Generics.Collections,
   System.Threading,
+  System.Net.URLClient,
   DX.Logger,
   DX.Logger.Provider.Async;
 
@@ -47,11 +48,15 @@ type
     class var FInstanceName: string;  // Instance identifier (e.g., "at.esculenta.elkerest-t")
     class var FBatchSize: Integer;
     class var FFlushInterval: Integer;
+    class var FValidateCertificate: Boolean;
     class var FLock: TObject;
   private
     procedure SendBatch(const ABatch: TArray<TLogEntry>);
     function LogLevelToSeqLevel(ALevel: TLogLevel): string;
     function FormatCLEF(const AEntry: TLogEntry): string;
+    procedure AcceptAnyCertificate(const Sender: TObject;
+      const ARequest: TURLRequest; const Certificate: TCertificate;
+      var Accepted: Boolean);
     // ILogProviderValidation implementation - calls class function in background
     procedure DoValidateConnection;
     procedure  ILogProviderValidation.ValidateConnection = DoValidateConnection;
@@ -103,6 +108,15 @@ type
     /// Set flush interval in milliseconds (default: 2000)
     /// </summary>
     class procedure SetFlushInterval(AInterval: Integer);
+
+    /// <summary>
+    /// Enable/disable server certificate validation (default: True).
+    /// Set to False to accept any TLS certificate — useful behind
+    /// deep-inspection firewalls that re-sign HTTPS traffic. WARNING:
+    /// disabling validation defeats MITM protection; use only when
+    /// required and the network path is otherwise trusted.
+    /// </summary>
+    class procedure SetValidateCertificate(AValidate: Boolean);
 
     /// <summary>
     /// Get singleton instance
@@ -255,6 +269,19 @@ begin
   end;
 end;
 
+class procedure TSeqLogProvider.SetValidateCertificate(AValidate: Boolean);
+begin
+  if not Assigned(FLock) then
+    FLock := TObject.Create;
+
+  TMonitor.Enter(FLock);
+  try
+    FValidateCertificate := AValidate;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+end;
+
 function TSeqLogProvider.GetBatchSize: Integer;
 begin
   if not Assigned(FLock) then
@@ -354,6 +381,13 @@ begin
   end;
 end;
 
+procedure TSeqLogProvider.AcceptAnyCertificate(const Sender: TObject;
+  const ARequest: TURLRequest; const Certificate: TCertificate;
+  var Accepted: Boolean);
+begin
+  Accepted := True;
+end;
+
 procedure TSeqLogProvider.SendBatch(const ABatch: TArray<TLogEntry>);
 var
   LHttpClient: THTTPClient;
@@ -369,6 +403,9 @@ begin
 
   LHttpClient := THTTPClient.Create;
   try
+    if not FValidateCertificate then
+      LHttpClient.OnValidateServerCertificate := AcceptAnyCertificate;
+
     LPayload := TStringBuilder.Create;
     try
       // Build newline-delimited JSON (CLEF format)
@@ -450,6 +487,9 @@ begin
 
   LHttpClient := THTTPClient.Create;
   try
+    if not FValidateCertificate then
+      LHttpClient.OnValidateServerCertificate := Instance.AcceptAnyCertificate;
+
     // Set reasonable timeout for validation
     LHttpClient.ConnectionTimeout := 5000;  // 5 seconds
     LHttpClient.ResponseTimeout := 10000;   // 10 seconds
@@ -514,6 +554,7 @@ initialization
   // Set defaults
   TSeqLogProvider.FBatchSize := C_DEFAULT_BATCH_SIZE;
   TSeqLogProvider.FFlushInterval := C_DEFAULT_FLUSH_INTERVAL;
+  TSeqLogProvider.FValidateCertificate := True;
   TSeqLogProvider.FServerUrl := '';
   TSeqLogProvider.FApiKey := '';
   TSeqLogProvider.FSource := ChangeFileExt(ExtractFileName(ParamStr(0)), '');
