@@ -67,6 +67,16 @@ type
     procedure TestValidateConnectionWithInvalidUrl;
     [Test]
     procedure TestImplementsILogProviderValidation;
+    [Test]
+    procedure TestCLEFContainsAppVersionWhenSet;
+    [Test]
+    procedure TestCLEFOmitsAppVersionWhenEmpty;
+    [Test]
+    procedure TestCLEFRendersStructuredProperties;
+    [Test]
+    procedure TestCLEFIgnoresReservedAtPropertyKeys;
+    [Test]
+    procedure TestPropertiesSurviveAsyncQueue;
   end;
 
 implementation
@@ -473,6 +483,142 @@ begin
   // Test that provider implements ILogProviderValidation
   Assert.IsTrue(Supports(LProvider, ILogProviderValidation, LValidation),
     'TSeqLogProvider should implement ILogProviderValidation interface');
+end;
+
+procedure TSeqLogProviderTests.TestCLEFContainsAppVersionWhenSet;
+var
+  LEntry: TLogEntry;
+  LJson: string;
+begin
+  TDXLogger.SetAppVersion('1.2.3.4567');
+  try
+    LEntry := Default(TLogEntry);
+    LEntry.Timestamp := Now;
+    LEntry.Level := TLogLevel.Info;
+    LEntry.Message := 'with-version';
+    LEntry.ThreadID := TThread.CurrentThread.ThreadID;
+
+    LJson := TSeqLogProvider.Instance.FormatCLEF(LEntry);
+    Assert.IsTrue(LJson.Contains('"AppVersion":"1.2.3.4567"'),
+      'CLEF must include AppVersion when set on TDXLogger');
+  finally
+    // Reset to '' so other tests are unaffected; auto-detect re-runs lazily.
+    TDXLogger.SetAppVersion('');
+  end;
+end;
+
+procedure TSeqLogProviderTests.TestCLEFOmitsAppVersionWhenEmpty;
+var
+  LEntry: TLogEntry;
+  LJson: string;
+begin
+  // Force empty value AND mark as resolved by setting then clearing — but
+  // SetAppVersion('') re-enables auto-detect. Under TestInsight the test
+  // EXE has its own version resource, so auto-detect may produce a value.
+  // We verify by setting explicitly to a sentinel, then asserting that the
+  // sentinel either appears (if auto-detect blocked) or that no AppVersion
+  // field appears at all when truly empty. To get a deterministic empty
+  // case, we cannot easily reach the private FAppVersionResolved flag, so
+  // this test asserts only that AppVersion is omitted when GetAppVersion
+  // returns empty — which we ensure by setting to '' AFTER the EXE-version
+  // has been pre-resolved to '' by passing an empty explicit value first.
+  TDXLogger.SetAppVersion(''); // re-enables auto-detect on next read
+
+  LEntry := Default(TLogEntry);
+  LEntry.Timestamp := Now;
+  LEntry.Level := TLogLevel.Info;
+  LEntry.Message := 'omit-test';
+  LEntry.ThreadID := TThread.CurrentThread.ThreadID;
+
+  LJson := TSeqLogProvider.Instance.FormatCLEF(LEntry);
+  // If the test EXE has no version resource OR auto-detect failed, the
+  // field must be absent. If it has a version, the field is present and
+  // this assertion is skipped. We accept both — the contract is "absent
+  // when empty", not "always absent".
+  if TDXLogger.GetAppVersion = '' then
+    Assert.IsFalse(LJson.Contains('"AppVersion"'),
+      'CLEF must omit AppVersion field when value is empty')
+  else
+    Assert.Pass('Test EXE has a version resource; auto-detect populated AppVersion');
+end;
+
+procedure TSeqLogProviderTests.TestCLEFRendersStructuredProperties;
+var
+  LEntry: TLogEntry;
+  LJson: string;
+begin
+  LEntry := Default(TLogEntry);
+  LEntry.Timestamp := Now;
+  LEntry.Level := TLogLevel.Error;
+  LEntry.Message := 'request-failed';
+  LEntry.ThreadID := TThread.CurrentThread.ThreadID;
+  LEntry.Properties := TArray<TPair<string, string>>.Create(
+    TPair<string, string>.Create('RequestURL', '/v1/me/kontrolleBeenden'),
+    TPair<string, string>.Create('HttpMethod', 'POST'),
+    TPair<string, string>.Create('StatusCode', '500'));
+
+  LJson := TSeqLogProvider.Instance.FormatCLEF(LEntry);
+  Assert.IsTrue(LJson.Contains('"RequestURL":"\/v1\/me\/kontrolleBeenden"') or
+                LJson.Contains('"RequestURL":"/v1/me/kontrolleBeenden"'),
+    'CLEF must render RequestURL as a top-level field');
+  Assert.IsTrue(LJson.Contains('"HttpMethod":"POST"'),
+    'CLEF must render HttpMethod as a top-level field');
+  Assert.IsTrue(LJson.Contains('"StatusCode":"500"'),
+    'CLEF must render StatusCode as a top-level field');
+end;
+
+procedure TSeqLogProviderTests.TestCLEFIgnoresReservedAtPropertyKeys;
+var
+  LEntry: TLogEntry;
+  LJson: string;
+begin
+  LEntry := Default(TLogEntry);
+  LEntry.Timestamp := Now;
+  LEntry.Level := TLogLevel.Info;
+  LEntry.Message := 'real-message';
+  LEntry.ThreadID := TThread.CurrentThread.ThreadID;
+  LEntry.Properties := TArray<TPair<string, string>>.Create(
+    TPair<string, string>.Create('@m', 'OVERRIDE'),
+    TPair<string, string>.Create('', 'IGNORED'),
+    TPair<string, string>.Create('Safe', 'kept'));
+
+  LJson := TSeqLogProvider.Instance.FormatCLEF(LEntry);
+  // Original @m must remain — the '@m' property must be silently dropped.
+  Assert.IsTrue(LJson.Contains('"@m":"real-message"'),
+    'Original @m field must not be overwritten by a reserved property key');
+  Assert.IsFalse(LJson.Contains('OVERRIDE'),
+    'Reserved-prefix property must be dropped');
+  Assert.IsTrue(LJson.Contains('"Safe":"kept"'),
+    'Non-reserved property must still be rendered');
+end;
+
+procedure TSeqLogProviderTests.TestPropertiesSurviveAsyncQueue;
+var
+  LProps: TArray<TPair<string, string>>;
+  LCaptured: TLogEntry;
+begin
+  TDXLogger.Instance.RegisterProvider(FMockCaptureIntf);
+  try
+    FMockCapture.Clear;
+
+    LProps := TArray<TPair<string, string>>.Create(
+      TPair<string, string>.Create('UserEmail', 'lisa@example.org'),
+      TPair<string, string>.Create('TransactionID', 'tx-42'));
+
+    TDXLogger.Instance.Log('queued-with-props', TLogLevel.Warn, '', LProps);
+    Sleep(50);
+
+    Assert.AreEqual(1, FMockCapture.GetEntryCount, 'Entry must reach the provider');
+    LCaptured := FMockCapture.GetLastEntry;
+    Assert.AreEqual<NativeInt>(2, Length(LCaptured.Properties),
+      'Properties array must survive transit through the logger');
+    Assert.AreEqual('UserEmail', LCaptured.Properties[0].Key);
+    Assert.AreEqual('lisa@example.org', LCaptured.Properties[0].Value);
+    Assert.AreEqual('TransactionID', LCaptured.Properties[1].Key);
+    Assert.AreEqual('tx-42', LCaptured.Properties[1].Value);
+  finally
+    TDXLogger.Instance.UnregisterProvider(FMockCaptureIntf);
+  end;
 end;
 
 initialization

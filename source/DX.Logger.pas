@@ -62,6 +62,14 @@ type
     /// avoid binding DX.Logger to a specific memory library.
     /// </summary>
     MemoryInfo: string;
+    /// <summary>
+    /// Optional: Structured key/value properties attached to this log entry.
+    /// Providers that support structured logging (e.g. Seq) render these
+    /// as top-level fields. Plain providers may ignore them. Dynamic-array
+    /// element type means the record copies safely through async queues.
+    /// Keys must not start with '@' (reserved by CLEF).
+    /// </summary>
+    Properties: TArray<TPair<string, string>>;
   end;
 
   /// <summary>
@@ -104,6 +112,8 @@ type
     class var FInstance: TDXLogger;
     class var FMinLevel: TLogLevel;
     class var FLock: TObject;
+    class var FAppVersion: string;
+    class var FAppVersionResolved: Boolean;
   private
     FProviders: TList<ILogProvider>;
     FMemoryInfoCallback: TMemoryInfoCallback;
@@ -130,6 +140,13 @@ type
     procedure Log(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = ''); overload;
 
     /// <summary>
+    /// Log a message with structured key/value properties (rendered as
+    /// top-level fields by structured providers like Seq).
+    /// </summary>
+    procedure Log(const AMessage: string; ALevel: TLogLevel; const ADetails: string;
+      const AProperties: TArray<TPair<string, string>>); overload;
+
+    /// <summary>
     /// Get singleton instance
     /// </summary>
     class function Instance: TDXLogger;
@@ -138,6 +155,23 @@ type
     /// Set minimum log level (messages below this level are ignored)
     /// </summary>
     class procedure SetMinLevel(ALevel: TLogLevel);
+
+    /// <summary>
+    /// Application version string (e.g. "1.0.3.1172"). Centralized here so
+    /// every provider sees the same value. Currently consumed by the Seq
+    /// provider, which adds it as `AppVersion` to every CLEF event. Other
+    /// providers may opt-in.
+    /// On Windows, an unset value is auto-detected from the executable's
+    /// version resource the first time it is read. On other platforms,
+    /// callers must set it explicitly via SetAppVersion.
+    /// </summary>
+    class function GetAppVersion: string;
+
+    /// <summary>
+    /// Explicitly set the application version. Overrides any auto-detected
+    /// value. Pass an empty string to re-enable auto-detection on next read.
+    /// </summary>
+    class procedure SetAppVersion(const AVersion: string);
 
     /// <summary>
     /// Optional callback that returns a short memory-pressure snapshot.
@@ -301,6 +335,78 @@ begin
   FMinLevel := ALevel;
 end;
 
+{$IFDEF MSWINDOWS}
+function GetAppVersionFromExe: string;
+var
+  LFileName: string;
+  LDummy: DWORD;
+  LSize: DWORD;
+  LBuffer: TBytes;
+  LFixedInfo: PVSFixedFileInfo;
+  LFixedSize: UINT;
+begin
+  Result := '';
+  LFileName := ParamStr(0);
+  LSize := GetFileVersionInfoSize(PChar(LFileName), LDummy);
+  if LSize = 0 then
+    Exit;
+
+  SetLength(LBuffer, LSize);
+  if not GetFileVersionInfo(PChar(LFileName), 0, LSize, LBuffer) then
+    Exit;
+
+  LFixedInfo := nil;
+  LFixedSize := 0;
+  if not VerQueryValue(LBuffer, '\', Pointer(LFixedInfo), LFixedSize) then
+    Exit;
+  if (LFixedInfo = nil) or (LFixedSize < SizeOf(TVSFixedFileInfo)) then
+    Exit;
+
+  Result := Format('%d.%d.%d.%d', [
+    HiWord(LFixedInfo^.dwFileVersionMS),
+    LoWord(LFixedInfo^.dwFileVersionMS),
+    HiWord(LFixedInfo^.dwFileVersionLS),
+    LoWord(LFixedInfo^.dwFileVersionLS)]);
+end;
+{$ENDIF}
+
+class function TDXLogger.GetAppVersion: string;
+begin
+  TMonitor.Enter(FLock);
+  try
+    if (FAppVersion = '') and (not FAppVersionResolved) then
+    begin
+      {$IFDEF MSWINDOWS}
+      try
+        FAppVersion := GetAppVersionFromExe;
+      except
+        // Never let version-detection break logging.
+        FAppVersion := '';
+      end;
+      {$ENDIF}
+      // TODO macOS/Linux: read version from bundle / packaging metadata.
+      // Until then, callers on those platforms must use SetAppVersion.
+      FAppVersionResolved := True;
+    end;
+    Result := FAppVersion;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+end;
+
+class procedure TDXLogger.SetAppVersion(const AVersion: string);
+begin
+  TMonitor.Enter(FLock);
+  try
+    FAppVersion := AVersion;
+    // Empty value re-enables auto-detect on next read; a non-empty value
+    // is treated as resolved so we never overwrite an explicit setting.
+    FAppVersionResolved := AVersion <> '';
+  finally
+    TMonitor.Exit(FLock);
+  end;
+end;
+
 procedure TDXLogger.RegisterProvider(const AProvider: ILogProvider);
 var
   LValidationProvider: ILogProviderValidation;
@@ -329,6 +435,12 @@ begin
 end;
 
 procedure TDXLogger.Log(const AMessage: string; ALevel: TLogLevel = TLogLevel.Info; const ADetails: string = '');
+begin
+  Log(AMessage, ALevel, ADetails, nil);
+end;
+
+procedure TDXLogger.Log(const AMessage: string; ALevel: TLogLevel; const ADetails: string;
+  const AProperties: TArray<TPair<string, string>>);
 var
   LEntry: TLogEntry;
   LProvider: ILogProvider;
@@ -343,6 +455,7 @@ begin
   LEntry.Details := ADetails;
   LEntry.ThreadID := TThread.CurrentThread.ThreadID;
   LEntry.MemoryInfo := '';
+  LEntry.Properties := AProperties;
   if Assigned(FMemoryInfoCallback) then
   begin
     try

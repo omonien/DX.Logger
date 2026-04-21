@@ -53,7 +53,6 @@ type
   private
     procedure SendBatch(const ABatch: TArray<TLogEntry>);
     function LogLevelToSeqLevel(ALevel: TLogLevel): string;
-    function FormatCLEF(const AEntry: TLogEntry): string;
     procedure AcceptAnyCertificate(const Sender: TObject;
       const ARequest: TURLRequest; const Certificate: TCertificate;
       var Accepted: Boolean);
@@ -135,6 +134,13 @@ type
     /// </summary>
     /// <returns>True if connection is valid, False otherwise</returns>
     class function ValidateConnection: Boolean;
+
+    /// <summary>
+    /// Render a single log entry as the exact CLEF JSON line that would be
+    /// shipped to Seq. Public so callers (tests, diagnostics) can inspect
+    /// the structured output without going through the network path.
+    /// </summary>
+    function FormatCLEF(const AEntry: TLogEntry): string;
   end;
 
 implementation
@@ -332,6 +338,8 @@ var
   LTimestamp: string;
   LSource: string;
   LInstance: string;
+  LAppVersion: string;
+  LProp: TPair<string, string>;
 begin
   // Format timestamp as ISO 8601
   LTimestamp := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss.zzz"Z"',
@@ -348,6 +356,10 @@ begin
   finally
     TMonitor.Exit(FLock);
   end;
+
+  // AppVersion is centrally managed by TDXLogger so every provider sees the
+  // same value. Read once per event; auto-detection (Windows) is cached.
+  LAppVersion := TDXLogger.GetAppVersion;
 
   LJson := TJSONObject.Create;
   try
@@ -373,6 +385,20 @@ begin
     // Add source if configured
     if LSource <> '' then
       LJson.AddPair('source', LSource);
+
+    // Add app version if known (set explicitly or auto-detected from EXE)
+    if LAppVersion <> '' then
+      LJson.AddPair('AppVersion', LAppVersion);
+
+    // Render structured properties as top-level CLEF fields. Skip empty
+    // keys and reject CLEF-reserved '@'-prefixed names so we cannot
+    // overwrite the canonical @t/@l/@m fields.
+    for LProp in AEntry.Properties do
+    begin
+      if (LProp.Key = '') or LProp.Key.StartsWith('@') then
+        Continue;
+      LJson.AddPair(LProp.Key, LProp.Value);
+    end;
 
     Result := LJson.ToJSON;
   finally

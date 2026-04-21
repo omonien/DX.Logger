@@ -63,6 +63,14 @@ type
     procedure TestMemoryInfoCallbackClearedByNil;
     [Test]
     procedure TestMemoryInfoCallbackExceptionSwallowed;
+    [Test]
+    procedure TestSetAppVersionExplicit;
+    [Test]
+    procedure TestSetAppVersionEmptyReenablesAutoDetect;
+    {$IFDEF MSWINDOWS}
+    [Test]
+    procedure TestGetAppVersionAutoDetectWindows;
+    {$ENDIF}
   end;
 
 implementation
@@ -406,6 +414,52 @@ begin
     TDXLogger.Instance.MemoryInfoCallback := nil;
   end;
 end;
+
+procedure TDXLoggerTests.TestSetAppVersionExplicit;
+begin
+  TDXLogger.SetAppVersion('9.9.9.9999');
+  try
+    Assert.AreEqual('9.9.9.9999', TDXLogger.GetAppVersion,
+      'Explicitly set version must be returned by GetAppVersion');
+  finally
+    TDXLogger.SetAppVersion('');
+  end;
+end;
+
+procedure TDXLoggerTests.TestSetAppVersionEmptyReenablesAutoDetect;
+var
+  LFirst, LSecond: string;
+begin
+  TDXLogger.SetAppVersion('5.5.5.5555');
+  Assert.AreEqual('5.5.5.5555', TDXLogger.GetAppVersion);
+
+  // Setting empty must clear the explicit value AND let the next read
+  // re-attempt auto-detect (so the cached '' from the explicit set does
+  // not stick forever). On Windows the test EXE has a version resource,
+  // so the second read should differ from the explicit one.
+  TDXLogger.SetAppVersion('');
+  LFirst := TDXLogger.GetAppVersion;
+  LSecond := TDXLogger.GetAppVersion;
+  Assert.AreEqual(LFirst, LSecond,
+    'Auto-detect result must be cached after first read');
+  Assert.AreNotEqual('5.5.5.5555', LFirst,
+    'After SetAppVersion('''') the explicit value must no longer be returned');
+end;
+
+{$IFDEF MSWINDOWS}
+procedure TDXLoggerTests.TestGetAppVersionAutoDetectWindows;
+var
+  LVersion: string;
+begin
+  // Reset to ensure auto-detect runs on this read.
+  TDXLogger.SetAppVersion('');
+  LVersion := TDXLogger.GetAppVersion;
+  // The DUnitX test EXE is built from a Delphi project that emits a
+  // version resource by default. Auto-detect must produce a value.
+  Assert.IsTrue(LVersion <> '',
+    'Auto-detect must read AppVersion from the test EXE version resource');
+end;
+{$ENDIF}
 
 initialization
   TDUnitX.RegisterTestFixture(TDXLoggerTests);
