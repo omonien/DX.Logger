@@ -77,7 +77,7 @@ Ziel ist eine „Drop-in"-Erweiterung: Unit einbinden → fertig.
 - **F-12** Konfigurierbare maximale Stack-Tiefe (Default: 32 Frames).
 - **F-13** Konfigurierbares Skip-Pattern (z. B. RTL-Frames oberhalb von `System.SysUtils.RaiseExceptObject` ausblenden).
 - **F-14** Thread-Safety — Stack-Erfassung und Map-Lookup aus mehreren Threads gleichzeitig sicher.
-- **F-15** Fallback bei fehlender Map-Datei: Stack als reine Adressliste (`$00401234`) statt Exception.
+- **F-15** Fallback bei fehlender Map-Datei: `StackTrace` liefert den festen String `-- no call stack - map file not found --`. Keine Exception, keine rohen Adressen.
 - **F-16** Optionales API zur **manuellen** Stack-Erfassung außerhalb von Exceptions (`DXCaptureStack: string`).
 - **F-17** Konfigurierbare Mindest-Log-Level für automatische Stack-Anhängung (Default: `Error`).
 
@@ -267,7 +267,7 @@ end;
 |----|----------------|------------|
 | R-1 | Map-Format variiert leicht zwischen Compiler-Versionen. | Parser tolerant gegen Whitespace/Zusatzspalten. |
 | R-2 | x64 Stack Walking ohne `RtlCaptureStackBackTrace` instabil. | API zwingend benutzen, kein eigenes Frame-Walking unter x64. |
-| R-3 | Map-Datei fehlt beim Kunden. | Fallback F-15: reine Adressliste, keine Exception. |
+| R-3 | Map-Datei fehlt oder Projekt ohne `-GD` kompiliert. | Fallback F-15: fixer Hinweisstring `-- no call stack - map file not found --`, keine Exception. |
 | R-4 | Konflikt mit anderen RTL-Hookern (z. B. madExcept). | Detection in `DXCallstackInstall`: vorhandene Hooks loggen; Option `ForceInstall`. |
 | R-5 | `TDXLogger.OnBeforeLog`-Callback existiert noch nicht im Core. | Muss parallel in `DX.Logger.pas` ergänzt werden (kleines API-Delta). |
 | O-1 | DLL-übergreifende Auflösung in v1.0 oder v1.1? | Aktuell v1.1 — in v1.0 nur EXE-eigene Map. |
@@ -280,7 +280,7 @@ end;
 1. Test-Konsolenanwendung wirft `EAccessViolation` aus drei Ebenen Tiefe → `E.StackTrace` enthält korrekte Methodennamen + Quellzeilen.
 2. Test mit benutzerdefinierter Exception → identisches Ergebnis.
 3. Reraise-Test → Stack zeigt auf Original-Raise-Punkt.
-4. Test ohne `.map`-Datei → keine Exception, reine Adressliste.
+4. Test ohne `.map`-Datei → keine Exception, `StackTrace` = `-- no call stack - map file not found --`.
 5. Multi-Thread-Test (100 Threads × 1.000 Exceptions) → keine Crashes.
 6. Performance-Test → Raise-Zeit ≤ 100 µs.
 7. DX.Logger-Integration: `DXLogError(E.Message, E)` schreibt `E.StackTrace` ins `Details`-Feld ohne expliziten Code.
