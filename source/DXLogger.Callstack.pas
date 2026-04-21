@@ -136,7 +136,7 @@ var
 // Forward declarations for RTL hooks
 // ---------------------------------------------------------------------------
 
-procedure DXCallstack_GetInfo(P: Exception); forward;
+function  DXCallstack_GetInfo(P: System.PExceptionRecord): Pointer; forward;
 procedure DXCallstack_CleanUp(Info: Pointer); forward;
 function  DXCallstack_InfoToString(Info: Pointer): string; forward;
 function  DXCaptureStackImpl: string; forward;
@@ -159,14 +159,30 @@ end;
 procedure DXCallstackInstall;
 begin
   {$IFDEF MSWINDOWS}
-  // implemented below
+  if not Assigned(Exception.GetExceptionStackInfoProc) then
+    Exception.GetExceptionStackInfoProc := DXCallstack_GetInfo
+  else
+    DXLog('DXLogger.Callstack: GetExceptionStackInfoProc already set by another library',
+          TLogLevel.Warn);
+
+  if not Assigned(Exception.CleanUpStackInfoProc) then
+    Exception.CleanUpStackInfoProc := DXCallstack_CleanUp;
+
+  if not Assigned(Exception.GetStackInfoStringProc) then
+    Exception.GetStackInfoStringProc := DXCallstack_InfoToString;
   {$ENDIF}
 end;
 
 procedure DXCallstackUninstall;
 begin
   {$IFDEF MSWINDOWS}
-  // implemented below
+  if PPointer(@Exception.GetExceptionStackInfoProc)^ = @DXCallstack_GetInfo then
+    Exception.GetExceptionStackInfoProc := nil;
+  if PPointer(@Exception.CleanUpStackInfoProc)^ = @DXCallstack_CleanUp then
+    Exception.CleanUpStackInfoProc := nil;
+  if PPointer(@Exception.GetStackInfoStringProc)^ = @DXCallstack_InfoToString then
+    Exception.GetStackInfoStringProc := nil;
+  TDXLogger.Instance.StackInfoCallback := nil;
   {$ENDIF}
 end;
 
@@ -184,14 +200,24 @@ end;
 // Stub implementations — replaced in Tasks 3–6
 // ---------------------------------------------------------------------------
 
-procedure DXCallstack_GetInfo(P: Exception);
+function DXCallstack_GetInfo(P: System.PExceptionRecord): Pointer;
+var
+  LRec: PStackInfoRecord;
 begin
-  // Task 3
+  New(LRec);
+  FillChar(LRec^, SizeOf(TStackInfoRecord), 0);
+  LRec^.FrameCount := RtlCaptureStackBackTrace(
+    DXCallstackOptions.SkipFrames,
+    cMaxCaptureFrames,
+    @LRec^.Frames[0],
+    nil);
+  Result := LRec;
 end;
 
 procedure DXCallstack_CleanUp(Info: Pointer);
 begin
-  // Task 3
+  if Info <> nil then
+    Dispose(PStackInfoRecord(Info));
 end;
 
 function DXCallstack_InfoToString(Info: Pointer): string;
