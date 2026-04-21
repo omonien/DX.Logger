@@ -127,6 +127,7 @@ type
   public
     procedure ResetForTest;
     function  Resolve(AAddr: Pointer): string;
+    property  HasMapFile: Boolean read FHasMapFile;
   end;
 
 var
@@ -197,6 +198,9 @@ begin
   {$IFDEF MSWINDOWS}
   if GHooksInstalled then
   begin
+    // Note: unconditionally clears all three slots. If a third-party library
+    // had pre-installed any hook that DXCallstackInstall skipped, that hook
+    // will be cleared here. Acceptable for single-hooker configurations.
     Exception.GetExceptionStackInfoProc := nil;
     Exception.CleanUpStackInfoProc      := nil;
     Exception.GetStackInfoStringProc    := nil;
@@ -258,6 +262,15 @@ begin
   if LRec^.FrameCount = 0 then
   begin
     Result := '';
+    Exit;
+  end;
+
+  // Short-circuit: if no map is available, return a single fallback line
+  // instead of repeating it for every frame.
+  GModuleMap.EnsureLoaded;
+  if not GModuleMap.HasMapFile then
+  begin
+    Result := cNoMapFallback;
     Exit;
   end;
 

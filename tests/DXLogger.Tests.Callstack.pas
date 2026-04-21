@@ -130,8 +130,8 @@ begin
       on E: Exception do
         LTrace := E.StackTrace;
     end;
-    Assert.IsTrue(LTrace.StartsWith('-- no call stack - map file not found --'),
-      'Fallback string must appear when map file is missing');
+    Assert.AreEqual('-- no call stack - map file not found --', LTrace,
+      'Fallback string must appear exactly once when map file is missing');
   finally
     DXCallstackOptions.MapFilePath := '';
     DXCallstackResetMapCache;
