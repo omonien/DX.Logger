@@ -71,6 +71,16 @@ type
     [Test]
     procedure TestGetAppVersionAutoDetectWindows;
     {$ENDIF}
+    [Test]
+    procedure TestLogPropertiesCallbackInjects;
+    [Test]
+    procedure TestLogPropertiesCallbackMergedWithExplicit;
+    [Test]
+    procedure TestLogPropertiesCallbackOverrideByCaller;
+    [Test]
+    procedure TestLogPropertiesCallbackNilNoOp;
+    [Test]
+    procedure TestLogPropertiesCallbackExceptionSwallowed;
   end;
 
 implementation
@@ -460,6 +470,141 @@ begin
     'Auto-detect must read AppVersion from the test EXE version resource');
 end;
 {$ENDIF}
+
+procedure TDXLoggerTests.TestLogPropertiesCallbackInjects;
+var
+  LCaptured: TLogEntry;
+begin
+  TDXLogger.Instance.LogPropertiesCallback :=
+    function: TArray<TPair<string, string>>
+    begin
+      Result := [TPair<string, string>.Create('ContextID', 'abc-123')];
+    end;
+  try
+    FMockProvider.Clear;
+    DXLog('msg');
+    LCaptured := FMockProvider.GetLastEntry;
+    Assert.AreEqual<NativeInt>(1, Length(LCaptured.Properties));
+    Assert.AreEqual('ContextID', LCaptured.Properties[0].Key);
+    Assert.AreEqual('abc-123', LCaptured.Properties[0].Value);
+  finally
+    TDXLogger.Instance.LogPropertiesCallback := nil;
+  end;
+end;
+
+procedure TDXLoggerTests.TestLogPropertiesCallbackMergedWithExplicit;
+var
+  LCaptured: TLogEntry;
+  LFoundContextID, LFoundExplicit: Boolean;
+  LProp: TPair<string, string>;
+begin
+  TDXLogger.Instance.LogPropertiesCallback :=
+    function: TArray<TPair<string, string>>
+    begin
+      Result := [TPair<string, string>.Create('ContextID', 'cb-1')];
+    end;
+  try
+    FMockProvider.Clear;
+    TDXLogger.Instance.Log('msg', TLogLevel.Info, '',
+      [TPair<string, string>.Create('Explicit', 'caller-1')]);
+
+    LCaptured := FMockProvider.GetLastEntry;
+    Assert.AreEqual<NativeInt>(2, Length(LCaptured.Properties),
+      'Beide Properties (Callback + explicit) muessen erscheinen');
+
+    LFoundContextID := False;
+    LFoundExplicit := False;
+    for LProp in LCaptured.Properties do
+    begin
+      if (LProp.Key = 'ContextID') and (LProp.Value = 'cb-1') then LFoundContextID := True;
+      if (LProp.Key = 'Explicit') and (LProp.Value = 'caller-1') then LFoundExplicit := True;
+    end;
+    Assert.IsTrue(LFoundContextID, 'ContextID aus Callback fehlt');
+    Assert.IsTrue(LFoundExplicit, 'Explicit aus Caller fehlt');
+  finally
+    TDXLogger.Instance.LogPropertiesCallback := nil;
+  end;
+end;
+
+procedure TDXLoggerTests.TestLogPropertiesCallbackOverrideByCaller;
+var
+  LCaptured: TLogEntry;
+  LContextIDValue: string;
+  LContextIDCount: Integer;
+  LProp: TPair<string, string>;
+begin
+  TDXLogger.Instance.LogPropertiesCallback :=
+    function: TArray<TPair<string, string>>
+    begin
+      Result := [TPair<string, string>.Create('ContextID', 'callback-value')];
+    end;
+  try
+    FMockProvider.Clear;
+    TDXLogger.Instance.Log('msg', TLogLevel.Info, '',
+      [TPair<string, string>.Create('ContextID', 'caller-override')]);
+
+    LCaptured := FMockProvider.GetLastEntry;
+    LContextIDValue := '';
+    LContextIDCount := 0;
+    for LProp in LCaptured.Properties do
+      if LProp.Key = 'ContextID' then
+      begin
+        LContextIDValue := LProp.Value;
+        Inc(LContextIDCount);
+      end;
+    Assert.AreEqual(1, LContextIDCount,
+      'ContextID darf nicht doppelt vorkommen — Caller muss Callback ueberschreiben');
+    Assert.AreEqual('caller-override', LContextIDValue,
+      'Caller-Wert muss gewinnen');
+  finally
+    TDXLogger.Instance.LogPropertiesCallback := nil;
+  end;
+end;
+
+procedure TDXLoggerTests.TestLogPropertiesCallbackNilNoOp;
+var
+  LCaptured: TLogEntry;
+begin
+  TDXLogger.Instance.LogPropertiesCallback := nil;
+  FMockProvider.Clear;
+  TDXLogger.Instance.Log('msg', TLogLevel.Info, '',
+    [TPair<string, string>.Create('Explicit', 'caller-1')]);
+
+  LCaptured := FMockProvider.GetLastEntry;
+  Assert.AreEqual<NativeInt>(1, Length(LCaptured.Properties));
+  Assert.AreEqual('Explicit', LCaptured.Properties[0].Key);
+end;
+
+procedure TDXLoggerTests.TestLogPropertiesCallbackExceptionSwallowed;
+var
+  LCaptured: TLogEntry;
+begin
+  TDXLogger.Instance.LogPropertiesCallback :=
+    function: TArray<TPair<string, string>>
+    begin
+      raise Exception.Create('callback explodes');
+    end;
+  try
+    FMockProvider.Clear;
+    TDXLogger.Instance.Log('msg-after-broken-callback', TLogLevel.Info, '',
+      [TPair<string, string>.Create('Explicit', 'caller-survives')]);
+
+    Assert.AreEqual(1, FMockProvider.GetEntryCount,
+      'Logging darf NIEMALS durch broken Callback verloren gehen');
+    LCaptured := FMockProvider.GetLastEntry;
+    Assert.AreEqual('msg-after-broken-callback', LCaptured.Message);
+
+    // Gap-closing assertion: Caller-Property muss broken Callback ueberleben.
+    // Bei Exception im Callback bleibt Properties auf dem Caller-Wert stehen —
+    // kein Property wird eingeschmuggelt, keines geht verloren.
+    Assert.AreEqual<NativeInt>(1, Length(LCaptured.Properties),
+      'Caller-Property muss broken Callback ueberleben');
+    Assert.AreEqual('Explicit', LCaptured.Properties[0].Key);
+    Assert.AreEqual('caller-survives', LCaptured.Properties[0].Value);
+  finally
+    TDXLogger.Instance.LogPropertiesCallback := nil;
+  end;
+end;
 
 initialization
   TDUnitX.RegisterTestFixture(TDXLoggerTests);

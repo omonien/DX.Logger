@@ -81,6 +81,16 @@ type
   TMemoryInfoCallback = reference to function: string;
 
   /// <summary>
+  /// Optionaler Callback, der bei jedem Log()-Aufruf gefeuert wird und
+  /// strukturierte Kontext-Properties zurueckliefert (z. B. ContextID,
+  /// RequestID, TenantID). Result wird in TLogEntry.Properties gemerged.
+  /// Caller-Properties haben Vorrang bei Key-Kollision.
+  /// Exceptions im Callback werden geschluckt — Logging darf niemals
+  /// durch broken Callbacks crashen.
+  /// </summary>
+  TLogPropertiesCallback = reference to function: TArray<TPair<string, string>>;
+
+  /// <summary>
   /// Interface for log providers
   /// </summary>
   ILogProvider = interface
@@ -117,6 +127,7 @@ type
   private
     FProviders: TList<ILogProvider>;
     FMemoryInfoCallback: TMemoryInfoCallback;
+    FLogPropertiesCallback: TLogPropertiesCallback;
 
     constructor Create;
     class constructor Create;
@@ -181,6 +192,15 @@ type
     /// the callback cheap (caching recommended) since it runs per log entry.
     /// </summary>
     property MemoryInfoCallback: TMemoryInfoCallback read FMemoryInfoCallback write FMemoryInfoCallback;
+
+    /// <summary>
+    /// Optionaler Callback, der pro Log-Eintrag strukturierte Properties
+    /// liefert. Result wird zu TLogEntry.Properties gemerged. Caller-
+    /// Properties haben Vorrang. Exceptions werden geschluckt.
+    /// Beispiel: pro Request eine ContextID aus dem Session-Kontext mitgeben.
+    /// </summary>
+    property LogPropertiesCallback: TLogPropertiesCallback
+      read FLogPropertiesCallback write FLogPropertiesCallback;
   end;
 
 /// <summary>
@@ -439,11 +459,48 @@ begin
   Log(AMessage, ALevel, ADetails, nil);
 end;
 
+function MergePropertiesCallerWins(
+  const ABase, ACaller: TArray<TPair<string, string>>): TArray<TPair<string, string>>;
+var
+  LBaseProp, LCallerProp: TPair<string, string>;
+  LFound: Boolean;
+  LResult: TArray<TPair<string, string>>;
+begin
+  // Strategie: Caller-Array komplett uebernehmen, dann Base-Eintraege hinzufuegen
+  // deren Key nicht im Caller-Array vorkommt. O(n*m) — n,m typisch < 10.
+  SetLength(LResult, 0);
+
+  for LCallerProp in ACaller do
+  begin
+    SetLength(LResult, Length(LResult) + 1);
+    LResult[High(LResult)] := LCallerProp;
+  end;
+
+  for LBaseProp in ABase do
+  begin
+    LFound := False;
+    for LCallerProp in ACaller do
+      if LCallerProp.Key = LBaseProp.Key then
+      begin
+        LFound := True;
+        Break;
+      end;
+    if not LFound then
+    begin
+      SetLength(LResult, Length(LResult) + 1);
+      LResult[High(LResult)] := LBaseProp;
+    end;
+  end;
+
+  Result := LResult;
+end;
+
 procedure TDXLogger.Log(const AMessage: string; ALevel: TLogLevel; const ADetails: string;
   const AProperties: TArray<TPair<string, string>>);
 var
   LEntry: TLogEntry;
   LProvider: ILogProvider;
+  LCallbackProps: TArray<TPair<string, string>>;
 begin
   // Check minimum log level
   if ALevel < FMinLevel then
@@ -455,7 +512,25 @@ begin
   LEntry.Details := ADetails;
   LEntry.ThreadID := TThread.CurrentThread.ThreadID;
   LEntry.MemoryInfo := '';
-  LEntry.Properties := AProperties;
+
+  // Callback-Properties als Basis ermitteln. Exceptions schlucken — broken
+  // Callback darf NIE Logging brechen (gleiche Disziplin wie MemoryInfoCallback).
+  LCallbackProps := nil;
+  if Assigned(FLogPropertiesCallback) then
+  begin
+    try
+      LCallbackProps := FLogPropertiesCallback();
+    except
+      LCallbackProps := nil;
+    end;
+  end;
+
+  // Caller-Properties haben Vorrang. Wenn Callback nichts liefert, einfach Caller verwenden.
+  if Length(LCallbackProps) = 0 then
+    LEntry.Properties := AProperties
+  else
+    LEntry.Properties := MergePropertiesCallerWins(LCallbackProps, AProperties);
+
   if Assigned(FMemoryInfoCallback) then
   begin
     try
