@@ -221,9 +221,39 @@ begin
 end;
 
 function DXCallstack_InfoToString(Info: Pointer): string;
+var
+  LRec:  PStackInfoRecord;
+  i:     Integer;
+  LMax:  Integer;
+  LBuf:  TStringBuilder;
+  LLine: string;
 begin
-  // Task 5
-  Result := '';
+  if Info = nil then
+  begin
+    Result := '';
+    Exit;
+  end;
+
+  LRec := PStackInfoRecord(Info);
+  if LRec^.FrameCount = 0 then
+  begin
+    Result := '';
+    Exit;
+  end;
+
+  LMax := Min(LRec^.FrameCount, DXCallstackOptions.MaxFrames);
+  LBuf := TStringBuilder.Create;
+  try
+    for i := 0 to LMax - 1 do
+    begin
+      LLine := GModuleMap.Resolve(LRec^.Frames[i]);
+      if LLine <> '' then
+        LBuf.AppendLine(LLine);
+    end;
+    Result := LBuf.ToString.TrimRight;
+  finally
+    LBuf.Free;
+  end;
 end;
 
 function TModuleMap.GetCodeSectionVA: UInt32;
@@ -471,15 +501,69 @@ begin
 end;
 
 function TModuleMap.Resolve(AAddr: Pointer): string;
+var
+  LOffset:  UInt32;
+  LSymIdx:  Integer;
+  LLineIdx: Integer;
+  LAddr:    string;
+  LSym:     string;
+  LLine:    string;
+  LDelta:   UInt32;
 begin
-  // Task 5
-  Result := cNoMapFallback;
+  EnsureLoaded;
+
+  if not FHasMapFile then
+  begin
+    Result := cNoMapFallback;
+    Exit;
+  end;
+
+  // Convert runtime address to code-section RVA
+  LOffset := UInt32(NativeUInt(AAddr) - NativeUInt(HInstance)) - FCodeSectionVA;
+
+  LAddr := '';
+  if DXCallstackOptions.IncludeAddresses then
+    LAddr := Format('[%p] ', [AAddr]);
+
+  LSym := '';
+  LSymIdx := FindNearestSymbol(LOffset);
+  if LSymIdx >= 0 then
+  begin
+    LDelta := LOffset - FSymbols[LSymIdx].RVA;
+    if LDelta = 0 then
+      LSym := FSymbols[LSymIdx].Name
+    else
+      LSym := FSymbols[LSymIdx].Name + ' + $' + IntToHex(LDelta, 2);
+  end;
+
+  LLine := '';
+  if DXCallstackOptions.IncludeLineInfo then
+  begin
+    LLineIdx := FindNearestLine(LOffset);
+    if LLineIdx >= 0 then
+      LLine := Format('  (%s line %d)', [FLines[LLineIdx].FileName, FLines[LLineIdx].Line]);
+  end;
+
+  Result := LAddr + LSym + LLine;
 end;
 
 function DXCaptureStackImpl: string;
+var
+  LFrames:     array[0..cMaxCaptureFrames - 1] of Pointer;
+  LFrameCount: Integer;
+  i, LMax:     Integer;
+  LBuf:        TStringBuilder;
 begin
-  // Task 5
-  Result := '';
+  LFrameCount := RtlCaptureStackBackTrace(1, cMaxCaptureFrames, @LFrames[0], nil);
+  LMax := Min(LFrameCount, DXCallstackOptions.MaxFrames);
+  LBuf := TStringBuilder.Create;
+  try
+    for i := 0 to LMax - 1 do
+      LBuf.AppendLine(GModuleMap.Resolve(LFrames[i]));
+    Result := LBuf.ToString.TrimRight;
+  finally
+    LBuf.Free;
+  end;
 end;
 
 {$ENDIF MSWINDOWS}
