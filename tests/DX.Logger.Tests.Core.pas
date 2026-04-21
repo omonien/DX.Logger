@@ -419,8 +419,10 @@ end;
 
 procedure TDXLoggerTests.TestStackInfoCallbackDefaultNil;
 begin
-  Assert.IsTrue(not Assigned(TDXLogger.Instance.StackInfoCallback),
-    'StackInfoCallback must be nil by default');
+  // DXLogger.Callstack is included in this test project, so DXCallstackInstall
+  // has registered the callback in initialization. Verify it is assigned.
+  Assert.IsTrue(Assigned(TDXLogger.Instance.StackInfoCallback),
+    'StackInfoCallback must be assigned when DXLogger.Callstack is included');
 end;
 
 procedure TDXLoggerTests.TestStackInfoCallbackPopulatesDetails;

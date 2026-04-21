@@ -170,6 +170,19 @@ begin
 
   if not Assigned(Exception.GetStackInfoStringProc) then
     Exception.GetStackInfoStringProc := DXCallstack_InfoToString;
+
+  TDXLogger.Instance.StackInfoCallback :=
+    function(ALevel: TLogLevel): string
+    var
+      LException: Exception;
+    begin
+      Result := '';
+      if ALevel < DXCallstackOptions.MinLogLevel then
+        Exit;
+      LException := Exception(ExceptObject);
+      if Assigned(LException) then
+        Result := LException.StackTrace;
+    end;
   {$ENDIF}
 end;
 
