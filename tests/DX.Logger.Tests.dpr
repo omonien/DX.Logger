@@ -22,7 +22,8 @@ uses
   DX.Logger.Tests.Core in 'DX.Logger.Tests.Core.pas',
   DX.Logger.Tests.FileProvider in 'DX.Logger.Tests.FileProvider.pas',
   DX.Logger.Tests.SeqProvider in 'DX.Logger.Tests.SeqProvider.pas',
-  DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas';
+  DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas',
+  DXLogger.Callstack in '..\source\DXLogger.Callstack.pas';
 
 {$IFNDEF TESTINSIGHT}
 var

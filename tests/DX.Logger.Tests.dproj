@@ -164,6 +164,7 @@
         <DCCReference Include="DX.Logger.Tests.FileProvider.pas"/>
         <DCCReference Include="DX.Logger.Tests.SeqProvider.pas"/>
         <DCCReference Include="DX.Logger.Tests.MemoryInfo.pas"/>
+        <DCCReference Include="..\source\DXLogger.Callstack.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
