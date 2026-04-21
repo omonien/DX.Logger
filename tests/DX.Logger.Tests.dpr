@@ -19,9 +19,11 @@ uses
   DX.Logger.Provider.Async in '..\source\DX.Logger.Provider.Async.pas',
   DX.Logger.Provider.TextFile in '..\source\DX.Logger.Provider.TextFile.pas',
   DX.Logger.Provider.Seq in '..\source\DX.Logger.Provider.Seq.pas',
+  DX.UUIDv7 in '..\source\DX.UUIDv7.pas',
   DX.Logger.Tests.Core in 'DX.Logger.Tests.Core.pas',
   DX.Logger.Tests.FileProvider in 'DX.Logger.Tests.FileProvider.pas',
   DX.Logger.Tests.SeqProvider in 'DX.Logger.Tests.SeqProvider.pas',
+  DX.UUIDv7.Tests in 'DX.UUIDv7.Tests.pas',
   DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas';
 
 {$IFNDEF TESTINSIGHT}

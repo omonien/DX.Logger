@@ -160,9 +160,11 @@
         <DCCReference Include="..\source\DX.Logger.MemoryInfo.pas"/>
         <DCCReference Include="..\source\DX.Logger.Provider.TextFile.pas"/>
         <DCCReference Include="..\source\DX.Logger.Provider.Seq.pas"/>
+        <DCCReference Include="..\source\DX.UUIDv7.pas"/>
         <DCCReference Include="DX.Logger.Tests.Core.pas"/>
         <DCCReference Include="DX.Logger.Tests.FileProvider.pas"/>
         <DCCReference Include="DX.Logger.Tests.SeqProvider.pas"/>
+        <DCCReference Include="DX.UUIDv7.Tests.pas"/>
         <DCCReference Include="DX.Logger.Tests.MemoryInfo.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
