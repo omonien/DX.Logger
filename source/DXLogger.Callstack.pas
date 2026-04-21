@@ -130,7 +130,8 @@ type
   end;
 
 var
-  GModuleMap: TModuleMap;
+  GModuleMap:    TModuleMap;
+  GHooksInstalled: Boolean;
 
 // ---------------------------------------------------------------------------
 // Forward declarations for RTL hooks
@@ -159,17 +160,22 @@ end;
 procedure DXCallstackInstall;
 begin
   {$IFDEF MSWINDOWS}
-  if not Assigned(Exception.GetExceptionStackInfoProc) then
-    Exception.GetExceptionStackInfoProc := DXCallstack_GetInfo
-  else
-    DXLog('DXLogger.Callstack: GetExceptionStackInfoProc already set by another library',
-          TLogLevel.Warn);
+  if not GHooksInstalled then
+  begin
+    if not Assigned(Exception.GetExceptionStackInfoProc) then
+      Exception.GetExceptionStackInfoProc := DXCallstack_GetInfo
+    else
+      DXLog('DXLogger.Callstack: GetExceptionStackInfoProc already set by another library',
+            TLogLevel.Warn);
 
-  if not Assigned(Exception.CleanUpStackInfoProc) then
-    Exception.CleanUpStackInfoProc := DXCallstack_CleanUp;
+    if not Assigned(Exception.CleanUpStackInfoProc) then
+      Exception.CleanUpStackInfoProc := DXCallstack_CleanUp;
 
-  if not Assigned(Exception.GetStackInfoStringProc) then
-    Exception.GetStackInfoStringProc := DXCallstack_InfoToString;
+    if not Assigned(Exception.GetStackInfoStringProc) then
+      Exception.GetStackInfoStringProc := DXCallstack_InfoToString;
+
+    GHooksInstalled := True;
+  end;
 
   TDXLogger.Instance.StackInfoCallback :=
     function(ALevel: TLogLevel): string
@@ -189,12 +195,13 @@ end;
 procedure DXCallstackUninstall;
 begin
   {$IFDEF MSWINDOWS}
-  if PPointer(@Exception.GetExceptionStackInfoProc)^ = @DXCallstack_GetInfo then
+  if GHooksInstalled then
+  begin
     Exception.GetExceptionStackInfoProc := nil;
-  if PPointer(@Exception.CleanUpStackInfoProc)^ = @DXCallstack_CleanUp then
-    Exception.CleanUpStackInfoProc := nil;
-  if PPointer(@Exception.GetStackInfoStringProc)^ = @DXCallstack_InfoToString then
-    Exception.GetStackInfoStringProc := nil;
+    Exception.CleanUpStackInfoProc      := nil;
+    Exception.GetStackInfoStringProc    := nil;
+    GHooksInstalled := False;
+  end;
   TDXLogger.Instance.StackInfoCallback := nil;
   {$ENDIF}
 end;
@@ -589,6 +596,7 @@ initialization
   DXCallstackOptions.MapFilePath      := '';
   DXCallstackOptions.MinLogLevel      := TLogLevel.Error;
   {$IFDEF MSWINDOWS}
+  GHooksInstalled := False;
   GModuleMap := TModuleMap.Create;
   DXCallstackInstall;
   {$ENDIF}

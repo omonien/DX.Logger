@@ -23,7 +23,8 @@ uses
   DX.Logger.Tests.FileProvider in 'DX.Logger.Tests.FileProvider.pas',
   DX.Logger.Tests.SeqProvider in 'DX.Logger.Tests.SeqProvider.pas',
   DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas',
-  DXLogger.Callstack in '..\source\DXLogger.Callstack.pas';
+  DXLogger.Callstack in '..\source\DXLogger.Callstack.pas',
+  DXLogger.Tests.Callstack in 'DXLogger.Tests.Callstack.pas';
 
 {$IFNDEF TESTINSIGHT}
 var

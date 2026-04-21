@@ -138,6 +138,7 @@
         <DCC_GenerateStackFrames>true</DCC_GenerateStackFrames>
         <DCC_DebugInfoInExe>true</DCC_DebugInfoInExe>
         <DCC_RemoteDebug>true</DCC_RemoteDebug>
+        <DCC_MapFile>3</DCC_MapFile>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_1_Win32)'!=''">
         <DCC_RemoteDebug>false</DCC_RemoteDebug>
@@ -165,6 +166,7 @@
         <DCCReference Include="DX.Logger.Tests.SeqProvider.pas"/>
         <DCCReference Include="DX.Logger.Tests.MemoryInfo.pas"/>
         <DCCReference Include="..\source\DXLogger.Callstack.pas"/>
+        <DCCReference Include="DXLogger.Tests.Callstack.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
