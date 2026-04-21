@@ -63,6 +63,14 @@ type
     procedure TestMemoryInfoCallbackClearedByNil;
     [Test]
     procedure TestMemoryInfoCallbackExceptionSwallowed;
+    [Test]
+    procedure TestStackInfoCallbackDefaultNil;
+    [Test]
+    procedure TestStackInfoCallbackPopulatesDetails;
+    [Test]
+    procedure TestStackInfoCallbackDoesNotOverwriteExistingDetails;
+    [Test]
+    procedure TestStackInfoCallbackExceptionSwallowed;
   end;
 
 implementation
@@ -404,6 +412,76 @@ begin
       'On callback failure MemoryInfo must fall back to empty');
   finally
     TDXLogger.Instance.MemoryInfoCallback := nil;
+  end;
+end;
+
+{ StackInfoCallback tests }
+
+procedure TDXLoggerTests.TestStackInfoCallbackDefaultNil;
+begin
+  Assert.IsTrue(not Assigned(TDXLogger.Instance.StackInfoCallback),
+    'StackInfoCallback must be nil by default');
+end;
+
+procedure TDXLoggerTests.TestStackInfoCallbackPopulatesDetails;
+var
+  LEntry: TLogEntry;
+begin
+  TDXLogger.Instance.StackInfoCallback :=
+    function(ALevel: TLogLevel): string
+    begin
+      Result := 'fake-stack';
+    end;
+  try
+    FMockProvider.Clear;
+    TDXLogger.Instance.Log('msg', TLogLevel.Error, '');
+    LEntry := FMockProvider.GetLastEntry;
+    Assert.AreEqual('fake-stack', LEntry.Details,
+      'StackInfoCallback result must appear in Details when Details is empty');
+  finally
+    TDXLogger.Instance.StackInfoCallback := nil;
+  end;
+end;
+
+procedure TDXLoggerTests.TestStackInfoCallbackDoesNotOverwriteExistingDetails;
+var
+  LEntry: TLogEntry;
+begin
+  TDXLogger.Instance.StackInfoCallback :=
+    function(ALevel: TLogLevel): string
+    begin
+      Result := 'should-not-appear';
+    end;
+  try
+    FMockProvider.Clear;
+    TDXLogger.Instance.Log('msg', TLogLevel.Error, 'explicit-detail');
+    LEntry := FMockProvider.GetLastEntry;
+    Assert.AreEqual('explicit-detail', LEntry.Details,
+      'Explicitly passed Details must never be overwritten by StackInfoCallback');
+  finally
+    TDXLogger.Instance.StackInfoCallback := nil;
+  end;
+end;
+
+procedure TDXLoggerTests.TestStackInfoCallbackExceptionSwallowed;
+var
+  LEntry: TLogEntry;
+begin
+  TDXLogger.Instance.StackInfoCallback :=
+    function(ALevel: TLogLevel): string
+    begin
+      raise Exception.Create('boom in callback');
+    end;
+  try
+    FMockProvider.Clear;
+    TDXLogger.Instance.Log('msg', TLogLevel.Error, '');
+    Assert.AreEqual(1, FMockProvider.GetEntryCount,
+      'Entry must still be logged even if StackInfoCallback raises');
+    LEntry := FMockProvider.GetLastEntry;
+    Assert.AreEqual('', LEntry.Details,
+      'Details must be empty when StackInfoCallback raises');
+  finally
+    TDXLogger.Instance.StackInfoCallback := nil;
   end;
 end;
 

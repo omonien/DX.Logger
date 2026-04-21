@@ -73,6 +73,14 @@ type
   TMemoryInfoCallback = reference to function: string;
 
   /// <summary>
+  /// Callback type called by TDXLogger.Log to fill Details with stack info.
+  /// Receives the log level so the callback can decide whether to capture.
+  /// Return empty string to leave Details unchanged.
+  /// Only called when Details is empty.
+  /// </summary>
+  TStackInfoCallback = reference to function(ALevel: TLogLevel): string;
+
+  /// <summary>
   /// Interface for log providers
   /// </summary>
   ILogProvider = interface
@@ -107,6 +115,7 @@ type
   private
     FProviders: TList<ILogProvider>;
     FMemoryInfoCallback: TMemoryInfoCallback;
+    FStackInfoCallback: TStackInfoCallback;
 
     constructor Create;
     class constructor Create;
@@ -147,6 +156,14 @@ type
     /// the callback cheap (caching recommended) since it runs per log entry.
     /// </summary>
     property MemoryInfoCallback: TMemoryInfoCallback read FMemoryInfoCallback write FMemoryInfoCallback;
+
+    /// <summary>
+    /// Optional callback that returns stack trace info for a log entry.
+    /// Called after MemoryInfoCallback, only when Details is empty.
+    /// Assign nil to disable. Exceptions in the callback are swallowed.
+    /// </summary>
+    property StackInfoCallback: TStackInfoCallback
+      read FStackInfoCallback write FStackInfoCallback;
   end;
 
 /// <summary>
@@ -350,6 +367,16 @@ begin
     except
       // A broken callback must never break logging — swallow silently.
       LEntry.MemoryInfo := '';
+    end;
+  end;
+
+  if Assigned(FStackInfoCallback) and (LEntry.Details = '') then
+  begin
+    try
+      LEntry.Details := FStackInfoCallback(LEntry.Level);
+    except
+      // A broken callback must never break logging — swallow silently.
+      LEntry.Details := '';
     end;
   end;
 
