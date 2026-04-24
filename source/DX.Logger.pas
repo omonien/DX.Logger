@@ -168,6 +168,13 @@ type
     class procedure SetMinLevel(ALevel: TLogLevel);
 
     /// <summary>
+    /// Returns True when a message at ALevel would be emitted (i.e. the
+    /// current MinLevel allows it). Callers can use this to skip expensive
+    /// message/parameter construction when the log would otherwise be dropped.
+    /// </summary>
+    class function IsLevelEnabled(ALevel: TLogLevel): Boolean;
+
+    /// <summary>
     /// Application version string (e.g. "1.0.3.1172"). Centralized here so
     /// every provider sees the same value. Currently consumed by the Seq
     /// provider, which adds it as `AppVersion` to every CLEF event. Other
@@ -353,6 +360,11 @@ end;
 class procedure TDXLogger.SetMinLevel(ALevel: TLogLevel);
 begin
   FMinLevel := ALevel;
+end;
+
+class function TDXLogger.IsLevelEnabled(ALevel: TLogLevel): Boolean;
+begin
+  Result := ALevel >= FMinLevel;
 end;
 
 {$IFDEF MSWINDOWS}
