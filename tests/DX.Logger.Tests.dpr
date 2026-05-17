@@ -16,6 +16,7 @@ uses
   DUnitX.TestFramework,
   DX.Logger in '..\source\DX.Logger.pas',
   DX.Logger.MemoryInfo in '..\source\DX.Logger.MemoryInfo.pas',
+  DX.Logger.CpuInfo in '..\source\DX.Logger.CpuInfo.pas',
   DX.Logger.Provider.Async in '..\source\DX.Logger.Provider.Async.pas',
   DX.Logger.Provider.TextFile in '..\source\DX.Logger.Provider.TextFile.pas',
   DX.Logger.Provider.Seq in '..\source\DX.Logger.Provider.Seq.pas',
@@ -24,7 +25,8 @@ uses
   DX.Logger.Tests.FileProvider in 'DX.Logger.Tests.FileProvider.pas',
   DX.Logger.Tests.SeqProvider in 'DX.Logger.Tests.SeqProvider.pas',
   DX.UUIDv7.Tests in 'DX.UUIDv7.Tests.pas',
-  DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas';
+  DX.Logger.Tests.MemoryInfo in 'DX.Logger.Tests.MemoryInfo.pas',
+  DX.Logger.Tests.CpuInfo in 'DX.Logger.Tests.CpuInfo.pas';
 
 {$IFNDEF TESTINSIGHT}
 var
