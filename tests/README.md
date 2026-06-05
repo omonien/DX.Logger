@@ -38,7 +38,7 @@ DX.Logger.Tests.exe
 
 ### MemoryInfo Tests (`DX.Logger.Tests.MemoryInfo.pas`)
 
-Tests for the ready-to-use `DX.Logger.MemoryInfo` unit (cross-platform).
+Tests for the ready-to-use `DX.Logger.SystemInfo` unit (cross-platform; memory snapshot).
 
 - **TestIsSupportedOnThisPlatform**: `IsSupported` matches the compile-time platform
 - **TestSnapshotHasPlausibleValues**: Fresh snapshot has non-zero values on supported platforms

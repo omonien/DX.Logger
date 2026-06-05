@@ -20,7 +20,7 @@ A minimalistic, cross-platform logging library for Delphi with a simple API and 
 - **Provider Architecture**: Easily extend with custom log targets
 - **Thread-Safe**: Safe for use in multi-threaded applications
 - **Thread-ID in every entry**: Standard providers (File, UI, Seq, Default) render `[Thread:N]` next to the log level so parallel work is easy to follow
-- **Optional Memory-Pressure Snippet**: Opt-in via `DX.Logger.MemoryInfo` — providers render a short `[WS:45MB PB:22MB]` block between thread-id and message; perfect for spotting memory growth in long-running services
+- **Optional Memory-Pressure Snippet**: Opt-in via `DX.Logger.SystemInfo` — providers render a short `[WS:45MB PB:22MB]` block between thread-id and message; perfect for spotting memory growth in long-running services
 - **Single-Unit Core**: Minimal dependencies
 
 ## Installation
@@ -223,12 +223,12 @@ TUILogProvider.Instance.ExternalStrings := nil;
 
 ## Optional: Memory-Pressure in Log Entries
 
-For long-running services it is often useful to see the current process memory right in the log stream without building a custom tool chain. `DX.Logger.MemoryInfo` provides a cross-platform ready-to-use implementation that you can enable with a single line.
+For long-running services it is often useful to see the current process memory right in the log stream without building a custom tool chain. `DX.Logger.SystemInfo` provides a cross-platform ready-to-use implementation that you can enable with a single line.
 
 ```delphi
 uses
   DX.Logger,
-  DX.Logger.MemoryInfo;
+  DX.Logger.SystemInfo;
 
 begin
   EnableMemoryInfo;              // default 500 ms cache
@@ -365,7 +365,8 @@ DX.Logger.Tests.exe
 DX.Logger/
 ├── source/
 │   ├── DX.Logger.pas                     # Core logger unit
-│   ├── DX.Logger.MemoryInfo.pas          # Optional: cross-platform memory-pressure snippet
+│   ├── DX.Logger.SystemInfo.pas          # Optional: CPU/memory snippet + static system config
+│   ├── DX.Logger.ThreadCpu.pas           # Optional: per-thread CPU diagnostic (top-N + hot-thread IP)
 │   ├── DX.Logger.Provider.TextFile.pas   # File logging provider
 │   ├── DX.Logger.Provider.Seq.pas        # Seq logging provider
 │   └── DX.Logger.Provider.UI.pas         # UI logging provider

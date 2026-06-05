@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+- `DX.Logger.CpuInfo` und `DX.Logger.MemoryInfo` wurden zu **`DX.Logger.SystemInfo`**
+  zusammengeführt. Typen (`TProcessCpuMonitor`, `TProcessMemoryMonitor`, …) und die
+  Prozeduren `EnableMemoryInfo`/`DisableMemoryInfo` bleiben unverändert — nur der
+  Unit-Name ändert sich. **Migration:** in `uses` `DX.Logger.CpuInfo`/`DX.Logger.MemoryInfo`
+  durch `DX.Logger.SystemInfo` ersetzen.
+
+### Added
+- `DX.Logger.SystemInfo`: `TSystemInfo.GetSnapshot` (CPU-Cores, RAM, OS, Bitness, VM-Hinweis)
+  für einmaliges Startup-Logging.
+- `DX.Logger.ThreadCpu`: `TThreadCpuMonitor` — per-Thread-CPU-Diagnose (Top-N + Hot-Thread-IP).
+
 ## [1.1.0] - 2026-04-15
 
 ### Added
