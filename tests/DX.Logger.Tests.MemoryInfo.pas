@@ -6,7 +6,7 @@ uses
   DUnitX.TestFramework,
   System.SysUtils,
   DX.Logger,
-  DX.Logger.MemoryInfo;
+  DX.Logger.SystemInfo;
 
 type
   [TestFixture]
