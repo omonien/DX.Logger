@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structured `Properties` as top-level fields. Same configuration surface as the
   TextFile provider (filename, max size, automatic rotation). Auto-registers on `uses`.
 
+### Tests
+- 16 new tests for `TJSONLLogProvider` (`DX.Logger.Tests.JSONLProvider`):
+  file creation, content, valid JSON per line, canonical structure (timestamp/level/message/threadId),
+  custom filename, directory creation, rotation, thread safety (10×50),
+  `memoryInfo` / `details` / `appVersion` fields, structured properties,
+  reserved-key protection, multi-line integrity, `Flush`, and all log-level mappings.
+
 ## [1.1.0] - 2026-04-15
 
 ### Added
