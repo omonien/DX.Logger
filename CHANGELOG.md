@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DX.Logger.SystemInfo`: `TSystemInfo.GetSnapshot` (CPU-Cores, RAM, OS, Bitness, VM-Hinweis)
   für einmaliges Startup-Logging.
 - `DX.Logger.ThreadCpu`: `TThreadCpuMonitor` — per-Thread-CPU-Diagnose (Top-N + Hot-Thread-IP).
+- **`DX.Logger.Provider.JSONL`**: new asynchronous JSON Lines (JSONL) file provider.
+  Writes one structured JSON object per line. Includes `timestamp` (ISO 8601 UTC),
+  `level`, `message`, `threadId`, optional `memoryInfo`/`details`/`appVersion`, and all
+  structured `Properties` as top-level fields. Same configuration surface as the
+  TextFile provider (filename, max size, automatic rotation). Auto-registers on `uses`.
 
 ## [1.1.0] - 2026-04-15
 
@@ -78,4 +83,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Unreleased]: https://github.com/omonien/DX.Logger/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/omonien/DX.Logger/releases/tag/v1.1.0
 [1.0.0]: https://github.com/omonien/DX.Logger/releases/tag/v1.0.0
-

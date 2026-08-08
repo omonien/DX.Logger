@@ -72,6 +72,23 @@ begin
 end.
 ```
 
+### With JSONL Logging
+
+```delphi
+uses
+  DX.Logger,
+  DX.Logger.Provider.JSONL;  // Automatically adds JSON Lines file logging
+
+begin
+  // Optional: Configure JSONL provider
+  TJSONLLogProvider.SetLogFileName('myapp.jsonl');
+  TJSONLLogProvider.SetMaxFileSize(10 * 1024 * 1024); // 10 MB
+
+  DXLog('Application started');
+  // ... your code
+end.
+```
+
 ## API Reference
 
 ### Log Functions
@@ -117,6 +134,7 @@ The `Details` parameter in log functions provides additional contextual informat
 - **File Provider**: Writes details as a separate TRACE-level line immediately after the main log entry, preserving all content
 - **UI Provider**: Writes details as a separate TRACE-level line, but truncates to 50 characters with a continuation message (`"... [see log file for details]"`) to prevent UI overflow
 - **Seq Provider**: Includes details as a structured property in the CLEF (Compact Log Event Format) JSON payload, making it searchable and queryable in Seq
+- **JSONL Provider**: Includes details as a structured `details` field in the JSON object
 
 This design allows each provider to optimize details handling for its specific use case while maintaining a consistent API.
 
@@ -149,6 +167,42 @@ TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
 ```
 
 When the log file reaches the maximum size, it's automatically renamed with a timestamp and a new file is created.
+
+### JSONL Provider
+
+The JSONL (JSON Lines) provider writes one structured JSON object per line — human-readable **and** machine-parseable. Ideal for log shipping, offline analysis with `jq`, and feeding into analytics pipelines.
+
+Features:
+- Asynchronous, non-blocking writes with batching
+- Automatic file rotation based on size
+- Structured fields including `timestamp` (ISO 8601 UTC), `level`, `message`, `threadId`
+- Optional `memoryInfo`, `details`, `appVersion`
+- All structured `Properties` rendered as top-level JSON fields
+- Same configuration surface as the TextFile provider
+
+**Example output:**
+
+```jsonl
+{"timestamp":"2026-08-08T12:34:56.789Z","level":"INFO","message":"Application started","threadId":5944,"appVersion":"1.2.0"}
+{"timestamp":"2026-08-08T12:34:57.012Z","level":"ERROR","message":"Database connection failed","threadId":5944,"details":"timeout after 5s","memoryInfo":"WS:45MB PB:22MB"}
+```
+
+**Configuration:**
+
+```delphi
+uses
+  DX.Logger,
+  DX.Logger.Provider.JSONL;
+
+// Set custom log file name (default: <exename>.jsonl)
+TJSONLLogProvider.SetLogFileName('C:\Logs\myapp.jsonl');
+
+// Set maximum file size before rotation (default: 10 MB)
+TJSONLLogProvider.SetMaxFileSize(5 * 1024 * 1024); // 5 MB
+
+// Provider auto-registers on uses. Explicit registration is also fine:
+// TDXLogger.Instance.RegisterProvider(TJSONLLogProvider.Instance);
+```
 
 ### Seq Provider
 
@@ -246,7 +300,7 @@ From that moment on every log entry gets a short memory snippet attached, and th
 - `WS` = Working Set (resident memory)
 - `PB` = Private Bytes / virtual size
 
-The snapshot is cached (default 500 ms) so high-frequency log calls stay cheap. The Seq provider exposes it as a structured `MemoryInfo` field (not inside `@m`) so it is queryable and chart-able.
+The snapshot is cached (default 500 ms) so high-frequency log calls stay cheap. The Seq provider exposes it as a structured `MemoryInfo` field (not inside `@m`) so it is queryable and chart-able. The JSONL provider exposes it as `memoryInfo`.
 
 ### Platform coverage
 
@@ -293,6 +347,7 @@ begin
   //   Details    : string   (optional, e.g. large JSON payload)
   //   ThreadID   : TThreadID
   //   MemoryInfo : string   (optional, set when a MemoryInfoCallback is installed)
+  //   Properties : TArray<TPair<string,string>>  (structured key/value pairs)
 end;
 
 // Register your provider
@@ -304,28 +359,28 @@ TDXLogger.Instance.RegisterProvider(TMyCustomProvider.Create);
 ### Windows
 - Console apps: Messages appear in console window
 - GUI apps: Messages sent to `OutputDebugString` (visible in DebugView or IDE)
-- File provider available
+- File / JSONL providers available
 
 ### macOS
 - Uses `NSLog` for system logging
 - Messages appear in Console.app
-- File provider available
+- File / JSONL providers available
 
 ### iOS
 - Uses `NSLog` for system logging
 - Messages appear in Xcode console
-- File provider available
+- File / JSONL providers available
 
 ### Android
 - Uses Android system log (`__android_log_write`)
 - Messages visible via `adb logcat`
 - Tag: "DXLogger"
-- File provider available
+- File / JSONL providers available
 
 ### Linux
 - Uses `syslog` for system logging
 - Messages appear in system logs
-- File provider available
+- File / JSONL providers available
 
 ## Configuration & Security
 
@@ -368,6 +423,7 @@ DX.Logger/
 │   ├── DX.Logger.SystemInfo.pas          # Optional: CPU/memory snippet + static system config
 │   ├── DX.Logger.ThreadCpu.pas           # Optional: per-thread CPU diagnostic (top-N + hot-thread IP)
 │   ├── DX.Logger.Provider.TextFile.pas   # File logging provider
+│   ├── DX.Logger.Provider.JSONL.pas      # JSON Lines (JSONL) file provider
 │   ├── DX.Logger.Provider.Seq.pas        # Seq logging provider
 │   └── DX.Logger.Provider.UI.pas         # UI logging provider
 ├── examples/
