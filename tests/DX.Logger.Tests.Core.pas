@@ -81,6 +81,20 @@ type
     procedure TestLogPropertiesCallbackNilNoOp;
     [Test]
     procedure TestLogPropertiesCallbackExceptionSwallowed;
+
+    { Startup configuration window }
+    [Test]
+    procedure TestWindowBuffersEntriesForNonDefaultProviders;
+    [Test]
+    procedure TestCompleteConfigurationIsIdempotent;
+    [Test]
+    procedure TestProviderRegisteredAfterCloseGetsNoReplay;
+    [Test]
+    procedure TestReplayAppliesMinLevelAtCloseTime;
+    [Test]
+    procedure TestBufferOverflowDropsNewestAndWarnsOnReplay;
+    [Test]
+    procedure TestCompleteConfigurationFromWorkerThread;
   end;
 
 implementation
@@ -606,8 +620,154 @@ begin
   end;
 end;
 
+{ Startup configuration window }
+
+// While the window is open, non-default providers receive nothing; once
+// CompleteConfiguration closes it, all buffered entries are replayed to
+// them in original order.
+procedure TDXLoggerTests.TestWindowBuffersEntriesForNonDefaultProviders;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear;
+
+  DXLog('early-1');
+  DXLog('early-2');
+  Assert.AreEqual(0, FMockProvider.GetEntryCount,
+    'Non-default providers must receive nothing while the configuration window is open');
+
+  TDXLogger.CompleteConfiguration;
+
+  Assert.AreEqual(2, FMockProvider.GetEntryCount,
+    'Buffered entries must be replayed once the window closes');
+  Assert.AreEqual('early-1', FMockProvider.GetEntry(0).Message, 'Order must be preserved (oldest first)');
+  Assert.AreEqual('early-2', FMockProvider.GetEntry(1).Message);
+end;
+
+// A second (and later) CompleteConfiguration call must be a no-op — no
+// double replay of already-flushed entries.
+procedure TDXLoggerTests.TestCompleteConfigurationIsIdempotent;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear;
+
+  DXLog('x');
+  TDXLogger.CompleteConfiguration;
+  TDXLogger.CompleteConfiguration;
+
+  Assert.AreEqual(1, FMockProvider.GetEntryCount, 'CompleteConfiguration must not replay twice');
+end;
+
+// Providers registered after the window has closed start empty and only
+// see live entries — the buffer dies with the window (design non-goal).
+procedure TDXLoggerTests.TestProviderRegisteredAfterCloseGetsNoReplay;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  // Setup already registered FMockProviderIntf; undo that so this test can
+  // observe the "registered after close" scenario cleanly, then re-register
+  // it after CompleteConfiguration below (mirrors a provider that binds
+  // late, e.g. in FormCreate).
+  TDXLogger.Instance.UnregisterProvider(FMockProviderIntf);
+  FMockProvider.Clear;
+
+  DXLog('early');
+  TDXLogger.CompleteConfiguration;
+
+  TDXLogger.Instance.RegisterProvider(FMockProviderIntf);
+  DXLog('late');
+
+  Assert.AreEqual(1, FMockProvider.GetEntryCount,
+    'A provider registered after the close must not receive the startup replay');
+  Assert.AreEqual('late', FMockProvider.GetLastEntry.Message);
+end;
+
+// The buffer stores entries unfiltered; replay applies the MinLevel that is
+// valid at close time, not the one in effect when the entry was logged.
+procedure TDXLoggerTests.TestReplayAppliesMinLevelAtCloseTime;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear;
+  TDXLogger.SetMinLevel(TLogLevel.Info);
+  DXLogTrace('t1'); // buffered despite MinLevel=Info being in effect right now
+  TDXLogger.SetMinLevel(TLogLevel.Trace); // MinLevel at close time allows Trace
+  TDXLogger.CompleteConfiguration;
+  Assert.AreEqual(1, FMockProvider.GetEntryCount,
+    'Trace entry must survive replay because MinLevel at close time allows it');
+  Assert.AreEqual('t1', FMockProvider.GetLastEntry.Message);
+
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear;
+  TDXLogger.SetMinLevel(TLogLevel.Trace);
+  DXLogTrace('t2');
+  TDXLogger.SetMinLevel(TLogLevel.Warn); // MinLevel at close time filters Trace out
+  TDXLogger.CompleteConfiguration;
+  Assert.AreEqual(0, FMockProvider.GetEntryCount,
+    'Trace entry must be filtered out of the replay because MinLevel at close time forbids it');
+
+  TDXLogger.SetMinLevel(TLogLevel.Trace); // restore test-suite default
+end;
+
+// Buffer cap: overflow drops the newest entries (oldest kept) and the
+// replay ends with one synthetic Warn entry stating the drop count.
+procedure TDXLoggerTests.TestBufferOverflowDropsNewestAndWarnsOnReplay;
+var
+  i: Integer;
+  LWarn: TLogEntry;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear;
+
+  for i := 0 to 10000 do // 10001 entries: e0..e10000, cap is 10000
+    DXLog(Format('e%d', [i]));
+
+  TDXLogger.CompleteConfiguration;
+
+  Assert.AreEqual(10001, FMockProvider.GetEntryCount,
+    '10000 kept entries plus one drop-warning entry');
+  Assert.AreEqual('e0', FMockProvider.GetEntry(0).Message, 'Oldest entry must be kept');
+  Assert.AreEqual('e9999', FMockProvider.GetEntry(9999).Message,
+    'Newest kept entry must be e9999 (e10000 was dropped)');
+
+  LWarn := FMockProvider.GetLastEntry;
+  Assert.AreEqual(TLogLevel.Warn, LWarn.Level);
+  Assert.IsTrue(LWarn.Message.Contains('1 startup log entries were dropped'));
+end;
+
+// CompleteConfiguration is callable from any thread; the calling test
+// thread waits for a worker thread to run it and observes the replay.
+procedure TDXLoggerTests.TestCompleteConfigurationFromWorkerThread;
+var
+  LEvent: TEvent;
+  LSignaled: Boolean;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear;
+  DXLog('from-main');
+
+  LEvent := TEvent.Create(nil, True, False, '');
+  try
+    TThread.CreateAnonymousThread(
+      procedure
+      begin
+        TDXLogger.CompleteConfiguration;
+        LEvent.SetEvent;
+      end).Start;
+
+    LSignaled := LEvent.WaitFor(2000) = wrSignaled;
+    Assert.IsTrue(LSignaled, 'CompleteConfiguration should complete within 2 seconds from a worker thread');
+    Assert.AreEqual(1, FMockProvider.GetEntryCount);
+    Assert.AreEqual('from-main', FMockProvider.GetLastEntry.Message);
+  finally
+    LEvent.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TDXLoggerTests);
+
+  // Close the configuration window deterministically for the legacy tests:
+  // they assume immediate provider dispatch. Window-specific tests reopen it
+  // via TDXLogger.ResetStartupStateForTesting.
+  TDXLogger.CompleteConfiguration;
 
 end.
 

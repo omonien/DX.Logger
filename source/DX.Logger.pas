@@ -124,8 +124,20 @@ type
     class var FLock: TObject;
     class var FAppVersion: string;
     class var FAppVersionResolved: Boolean;
+    // Startup configuration window (see docs/superpowers/specs/2026-08-14-
+    // startup-configuration-window-design.md). Class-level so the window can
+    // be reasoned about (and reset for tests) independently of any single
+    // TDXLogger instance.
+    class var FWindowOpen: Boolean;
+    class var FStartupBuffer: TList<TLogEntry>;
+    class var FStartupDropCount: Integer;
+    class var FStartupTimeoutMs: Cardinal;
   private
     FProviders: TList<ILogProvider>;
+    // The platform default provider, kept apart from FProviders so it can be
+    // dispatched to directly while the window is open and excluded from the
+    // startup replay in CompleteConfiguration.
+    FDefaultProvider: ILogProvider;
     FMemoryInfoCallback: TMemoryInfoCallback;
     FLogPropertiesCallback: TLogPropertiesCallback;
 
@@ -173,6 +185,29 @@ type
     /// message/parameter construction when the log would otherwise be dropped.
     /// </summary>
     class function IsLevelEnabled(ALevel: TLogLevel): Boolean;
+
+    /// <summary>
+    /// Ends the configuration phase: replays all buffered startup entries (in
+    /// original order, filtered with the MinLevel valid now) to every registered
+    /// provider except the platform default provider, then discards the buffer.
+    /// Thread-safe and idempotent; may be called from any thread. Providers
+    /// registered after this call start empty and receive live entries only.
+    /// </summary>
+    class procedure CompleteConfiguration;
+
+    /// <summary>
+    /// Fallback timeout for the configuration window in milliseconds.
+    /// Default 10000. 0 disables auto-close (explicit CompleteConfiguration or
+    /// process shutdown only). Effective while the window is open.
+    /// </summary>
+    class property StartupTimeoutMs: Cardinal read FStartupTimeoutMs write FStartupTimeoutMs;
+
+    /// <summary>
+    /// TEST SUPPORT ONLY: reopens the configuration window, clears the startup
+    /// buffer and drop counter, and re-arms the fallback watchdog with the
+    /// current StartupTimeoutMs. Not intended for production code.
+    /// </summary>
+    class procedure ResetStartupStateForTesting;
 
     /// <summary>
     /// Application version string (e.g. "1.0.3.1172"). Centralized here so
@@ -246,6 +281,16 @@ uses
   Posix.Syslog,
   {$ENDIF}
   System.SyncObjs;
+
+const
+  // Startup configuration window (see docs/superpowers/specs/2026-08-14-
+  // startup-configuration-window-design.md). Fixed cap on the startup
+  // buffer; on overflow the newest entries are dropped (oldest boot lines
+  // carry the highest diagnostic value).
+  C_STARTUP_BUFFER_MAX = 10000;
+  // Default fallback watchdog timeout in milliseconds (watchdog itself is
+  // wired up in a later task; the default value already applies here).
+  C_DEFAULT_STARTUP_TIMEOUT_MS = 10000;
 
 type
   /// <summary>
@@ -326,8 +371,12 @@ begin
   inherited Create;
   FProviders := TList<ILogProvider>.Create;
 
-  // Register default platform-specific provider
-  RegisterProvider(TDefaultLogProvider.Create);
+  // Register default platform-specific provider. Keep the reference in
+  // FDefaultProvider (distinct from anonymous registration) so Log can
+  // dispatch to it directly while the configuration window is open, and
+  // CompleteConfiguration can exclude it from the startup replay.
+  FDefaultProvider := TDefaultLogProvider.Create;
+  RegisterProvider(FDefaultProvider);
 end;
 
 destructor TDXLogger.Destroy;
@@ -339,6 +388,7 @@ end;
 class destructor TDXLogger.Destroy;
 begin
   FreeAndNil(FInstance);
+  FreeAndNil(FStartupBuffer);
   FreeAndNil(FLock);
 end;
 
@@ -513,9 +563,22 @@ var
   LEntry: TLogEntry;
   LProvider: ILogProvider;
   LCallbackProps: TArray<TPair<string, string>>;
+  LWindowOpen: Boolean;
 begin
-  // Check minimum log level
-  if ALevel < FMinLevel then
+  // Startup configuration window: while open, the entry must be built and
+  // buffered regardless of MinLevel (a later SetMinLevel(Trace) must still
+  // recover early trace lines at replay time). Once the window is closed,
+  // behavior is exactly as before the window existed: skip everything below
+  // MinLevel right here. So the early-out below only fires when the window
+  // is closed AND the level is filtered.
+  TMonitor.Enter(FLock);
+  try
+    LWindowOpen := FWindowOpen;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  if (not LWindowOpen) and (ALevel < FMinLevel) then
     Exit;
 
   LEntry.Timestamp := Now;
@@ -553,6 +616,30 @@ begin
     end;
   end;
 
+  if LWindowOpen then
+  begin
+    // Buffer unfiltered (regardless of MinLevel) so a later SetMinLevel
+    // still recovers early entries at replay time. Only the default
+    // provider writes immediately, and only if the current MinLevel allows
+    // it — all other registered providers receive nothing while open.
+    TMonitor.Enter(FLock);
+    try
+      if FStartupBuffer.Count >= C_STARTUP_BUFFER_MAX then
+        Inc(FStartupDropCount) // buffer full: drop the newest entry, keep the oldest ones
+      else
+        FStartupBuffer.Add(LEntry);
+    finally
+      TMonitor.Exit(FLock);
+    end;
+
+    if (ALevel >= FMinLevel) and Assigned(FDefaultProvider) then
+      FDefaultProvider.Log(LEntry);
+    Exit;
+  end;
+
+  // Window closed: unchanged single-loop dispatch to every registered
+  // provider (including the default one), exactly as before the
+  // configuration window existed.
   TMonitor.Enter(Self);
   try
     for LProvider in FProviders do
@@ -560,6 +647,85 @@ begin
   finally
     TMonitor.Exit(Self);
   end;
+end;
+
+class procedure TDXLogger.CompleteConfiguration;
+var
+  LSnapshot: TArray<TLogEntry>;
+  LDropCount: Integer;
+  LInstance: TDXLogger;
+  LProvider: ILogProvider;
+  LEntry: TLogEntry;
+  LWarnEntry: TLogEntry;
+begin
+  // Under the class lock: idempotent check-and-close, then snapshot + clear
+  // the buffer and drop counter. Kept separate from the replay dispatch
+  // below (which needs the instance monitor) to mirror the discipline used
+  // elsewhere: class-level lock for class state, instance monitor for
+  // provider dispatch.
+  TMonitor.Enter(FLock);
+  try
+    if not FWindowOpen then
+      Exit; // already closed: no-op, second and later calls are idempotent
+
+    FWindowOpen := False;
+    LSnapshot := FStartupBuffer.ToArray;
+    LDropCount := FStartupDropCount;
+    FStartupBuffer.Clear;
+    FStartupDropCount := 0;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  LInstance := Instance;
+
+  TMonitor.Enter(LInstance);
+  try
+    // Replay in original order, filtered with the MinLevel valid now (at
+    // close time) — not the MinLevel that was in effect when each entry was
+    // originally logged. Every provider except the default one takes part;
+    // the default provider already wrote each entry immediately when it was
+    // logged.
+    for LEntry in LSnapshot do
+      if LEntry.Level >= FMinLevel then
+        for LProvider in LInstance.FProviders do
+          if LProvider <> LInstance.FDefaultProvider then
+            LProvider.Log(LEntry);
+
+    if LDropCount > 0 then
+    begin
+      // One final synthetic warning so the operator knows startup entries
+      // were lost, sent to the same providers as the replay above.
+      LWarnEntry.Timestamp := Now;
+      LWarnEntry.Level := TLogLevel.Warn;
+      LWarnEntry.Message := Format('DX.Logger: %d startup log entries were dropped (startup buffer full)', [LDropCount]);
+      LWarnEntry.Details := '';
+      LWarnEntry.ThreadID := TThread.CurrentThread.ThreadID;
+      LWarnEntry.MemoryInfo := '';
+      LWarnEntry.Properties := nil;
+
+      for LProvider in LInstance.FProviders do
+        if LProvider <> LInstance.FDefaultProvider then
+          LProvider.Log(LWarnEntry);
+    end;
+  finally
+    TMonitor.Exit(LInstance);
+  end;
+end;
+
+class procedure TDXLogger.ResetStartupStateForTesting;
+begin
+  TMonitor.Enter(FLock);
+  try
+    FWindowOpen := True;
+    FStartupBuffer.Clear;
+    FStartupDropCount := 0;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  // TODO (later task): re-arm the fallback watchdog thread with the current
+  // StartupTimeoutMs. No-op placeholder until the watchdog is implemented.
 end;
 
 { Global Functions }
@@ -616,6 +782,14 @@ begin
   FMinLevel := TLogLevel.Info; // Release Default: log Info & Errors only
   {$ENDIF}
   FLock := TObject.Create;
+
+  // Configuration window open from process start (see docs/superpowers/
+  // specs/2026-08-14-startup-configuration-window-design.md): early log
+  // entries survive, unfiltered, until CompleteConfiguration replays them.
+  FWindowOpen := True;
+  FStartupBuffer := TList<TLogEntry>.Create;
+  FStartupDropCount := 0;
+  FStartupTimeoutMs := C_DEFAULT_STARTUP_TIMEOUT_MS; // watchdog wiring: later task
 end;
 
 end.
