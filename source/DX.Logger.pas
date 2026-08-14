@@ -709,13 +709,25 @@ begin
   // moment later) merely wastes building an entry that turns out to be
   // filtered; it can never lose data. The authoritative, race-free check is
   // the one immediately before the buffer append below, which re-reads
-  // FWindowOpen under the same FLock that guards the append itself.
-  TMonitor.Enter(FLock);
-  try
-    LWindowOpen := FWindowOpen;
-  finally
-    TMonitor.Exit(FLock);
-  end;
+  // FWindowOpen under FLock.
+  //
+  // Deliberately UNLOCKED read (CodeRabbit PR #1 review finding): taking
+  // FLock here on every single Log call, in addition to the authoritative
+  // locked re-check a few lines below, put two lock/unlock round-trips on
+  // this hot path for a value this call only ever consults, never mutates.
+  // Safe without the lock because FWindowOpen only ever transitions
+  // True -> False in production: it is set True exactly twice, both
+  // single-threaded with respect to Log -- once in the class constructor
+  // (TDXLogger.Create, which runs at unit initialization before any other
+  // thread exists) and once in ResetStartupStateForTesting (test-only; its
+  // callers create worker threads only AFTER the reset call returns, and
+  // thread creation is itself a memory barrier that publishes the write to
+  // the new thread). It is set False exactly once, under FLock, in
+  // CompleteConfiguration. So an unlocked read here can only ever be stale
+  // in the harmless "still looks open" direction -- never "looks closed
+  // while actually still open" -- and the locked re-check below remains the
+  // sole authority for whether an entry is actually buffered.
+  LWindowOpen := FWindowOpen;
 
   if (not LWindowOpen) and (ALevel < FMinLevel) then
     Exit;

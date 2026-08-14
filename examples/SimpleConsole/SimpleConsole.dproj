@@ -208,7 +208,6 @@
         </DelphiCompile>
         <DCCReference Include="..\..\source\DX.Logger.pas"/>
         <DCCReference Include="..\..\source\DX.Logger.Provider.TextFile.pas"/>
-        <DCCReference Include="..\..\source\DX.Logger.Provider.Async.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

@@ -118,13 +118,13 @@ class procedure TDXLogger.CompleteConfiguration;
 
 - Thread-safe and **idempotent** — safe to call from any thread; second and later calls are no-ops.
 - Closes the window: replays the buffer (order preserved, filtered with the `MinLevel` valid now) to every registered provider except the platform default one, then discards the buffer.
-- Providers registered while the window was open take part in the replay. Providers registered after the close start empty and receive live entries only.
+- Providers registered while the window was open take part in the replay. Providers registered after `CompleteConfiguration` has returned start empty and receive live entries only; a registration racing the close may still be included in the replay (it never receives less, only more).
 
 The replay dispatch itself runs **without** holding the internal per-instance lock (only the window-close/buffer-snapshot step is taken under that lock) — this avoids a deadlock when a bound provider's `Log` call blocks the calling thread, e.g. a UI provider that synchronizes onto a full main thread while `CompleteConfiguration` itself was called from that same main thread. One accepted consequence: a live entry logged concurrently right after the window closes may reach a provider before the tail of the startup replay does. This only affects the *relative order in which a provider observes entries* around the close boundary — no entry is ever lost or duplicated, and each entry's `Timestamp` still records its true order. A provider unregistered while a replay is still in flight may likewise still receive the remainder of that replay — the dispatch runs against a snapshot taken up front, and the snapshot's own interface reference keeps the provider alive for it, the same commitment semantics the previous fully-locked dispatch already had.
 
 ### Recommended DPR layout
 
-Put `DX.Logger` and **all** provider units in the `uses` clause before anything else that might log (only memory managers such as FastMM, which must not depend on DX.Logger, go first) — this makes sure their `initialization` sections (and therefore provider registration) run as early as possible. Configure providers as the first statement(s) after `begin`, then close the window explicitly:
+Put `DX.Logger` and **all** provider units in the `uses` clause before anything else that might log (only memory managers such as FastMM, which must not depend on DX.Logger, go first) — this makes sure `TFileLogProvider`'s `initialization` section (and therefore its self-registration) runs as early as possible, and that `TSeqLogProvider`/`TUILogProvider`'s internal defaults are set before the DPR body registers them explicitly (see "Why it exists" above). Configure providers as the first statement(s) after `begin`, then close the window explicitly:
 
 ```pascal
 program MyApp;
@@ -143,7 +143,9 @@ begin
   // Configure providers first, then close the configuration window.
   // Without CompleteConfiguration the window auto-closes after
   // TDXLogger.StartupTimeoutMs (default: 10 s) or at process shutdown —
-  // early entries are never lost either way.
+  // early entries are never lost either way, subject to the startup
+  // buffer's 10 000-entry cap (oldest entries kept; newest dropped on
+  // overflow, with the drop count reported at replay).
   TFileLogProvider.SetLogFileName('LOG\MyApp.log');
   TDXLogger.SetMinLevel(TLogLevel.Trace);
   TDXLogger.CompleteConfiguration;
@@ -175,7 +177,7 @@ class property TDXLogger.StartupTimeoutMs: Cardinal; // default 10000; 0 = no au
 
 ### Shutdown flush
 
-If the process exits (or the DX.Logger unit finalizes) while the window is still open — a short-lived CLI tool that never calls `CompleteConfiguration` and exits before the timeout, for example — the class destructor closes it as part of teardown: buffered entries are replayed to all registered providers before the providers themselves are freed. Early entries are therefore **never lost**, regardless of how the process ends.
+If the process exits (or the DX.Logger unit finalizes) while the window is still open — a short-lived CLI tool that never calls `CompleteConfiguration` and exits before the timeout, for example — the class destructor closes it as part of teardown: buffered entries are replayed to all registered providers before the providers themselves are freed. Early entries are therefore **never lost** regardless of how the process ends, subject to the startup buffer's 10 000-entry cap (oldest entries kept; newest dropped on overflow, with the drop count reported at replay).
 
 ### Notes for custom-provider authors
 
