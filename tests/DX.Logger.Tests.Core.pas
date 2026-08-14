@@ -97,6 +97,12 @@ type
     procedure TestCompleteConfigurationFromWorkerThread;
     [Test]
     procedure TestNoEntryLostWhenClosingConcurrently;
+    [Test]
+    procedure TestWatchdogClosesWindowAfterTimeout;
+    [Test]
+    procedure TestStartupTimeoutZeroDisablesAutoClose;
+    [Test]
+    procedure TestClosedWindowFallThroughRespectsMinLevel;
   end;
 
 implementation
@@ -816,6 +822,83 @@ begin
   Assert.AreEqual('race-0', FMockProvider.GetEntry(0).Message);
   Assert.AreEqual(Format('race-%d', [C_ITERATIONS - 1]), FMockProvider.GetLastEntry.Message);
   // Window is closed at this point (CompleteConfiguration ran above) — state left as required.
+end;
+
+// Fallback watchdog: with a short StartupTimeoutMs, nobody calling
+// CompleteConfiguration explicitly must not lose the early entry — the
+// watchdog thread has to auto-close the window on its own once the timeout
+// elapses, replaying the buffered entry exactly as an explicit close would.
+procedure TDXLoggerTests.TestWatchdogClosesWindowAfterTimeout;
+var
+  LElapsedMs: Integer;
+begin
+  TDXLogger.StartupTimeoutMs := 200;
+  TDXLogger.ResetStartupStateForTesting; // re-arms the watchdog with 200 ms
+  FMockProvider.Clear;
+
+  DXLog('early');
+  Assert.AreEqual(0, FMockProvider.GetEntryCount,
+    'Entry must be buffered, not dispatched, while the window is still open');
+
+  // Poll instead of a single fixed Sleep: robust against scheduler jitter
+  // while still bounded (2 s ceiling well above the 200 ms timeout).
+  LElapsedMs := 0;
+  while (FMockProvider.GetEntryCount = 0) and (LElapsedMs < 2000) do
+  begin
+    Sleep(10);
+    Inc(LElapsedMs, 10);
+  end;
+
+  Assert.AreEqual(1, FMockProvider.GetEntryCount,
+    'Watchdog must auto-close the window and replay the buffered entry once StartupTimeoutMs elapses');
+  Assert.AreEqual('early', FMockProvider.GetLastEntry.Message);
+
+  // Restore: StartupTimeoutMs = 0 so no other test's ResetStartupStateForTesting
+  // accidentally arms a short-lived watchdog that could fire mid-test and
+  // interfere with unrelated assertions (watchdog leakage across tests).
+  TDXLogger.StartupTimeoutMs := 0;
+end;
+
+// StartupTimeoutMs = 0 must disable the fallback watchdog entirely: the
+// window stays open (and buffered) indefinitely until an explicit
+// CompleteConfiguration call, with no auto-close ever happening.
+procedure TDXLoggerTests.TestStartupTimeoutZeroDisablesAutoClose;
+begin
+  TDXLogger.StartupTimeoutMs := 0;
+  TDXLogger.ResetStartupStateForTesting; // no watchdog armed (timeout is 0)
+  FMockProvider.Clear;
+
+  DXLog('early');
+  Sleep(300); // comfortably longer than the 200 ms used by the timeout test above
+  Assert.AreEqual(0, FMockProvider.GetEntryCount,
+    'With StartupTimeoutMs = 0 no watchdog may auto-close the window, ever');
+
+  TDXLogger.CompleteConfiguration;
+  Assert.AreEqual(1, FMockProvider.GetEntryCount,
+    'The buffered entry must still be replayed once the window is closed explicitly');
+end;
+
+// Controller-assigned hardening (Task-1 review deferral): the closed-window
+// fall-through branch in Log (LBuffered = False) did not re-check MinLevel,
+// so a below-MinLevel entry could in principle leak to providers in the
+// narrow race described at that guard's call site. This exercises the
+// closed-window dispatch path directly and asserts the guard holds.
+procedure TDXLoggerTests.TestClosedWindowFallThroughRespectsMinLevel;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  TDXLogger.CompleteConfiguration; // close the window: exercise the closed-window path
+  TDXLogger.SetMinLevel(TLogLevel.Info);
+  FMockProvider.Clear;
+
+  DXLogTrace('below');
+  Assert.AreEqual(0, FMockProvider.GetEntryCount,
+    'Below-MinLevel entry must not reach providers on the closed-window path');
+
+  DXLogInfo('at');
+  Assert.AreEqual(1, FMockProvider.GetEntryCount,
+    'At-MinLevel entry must reach providers on the closed-window path');
+
+  TDXLogger.SetMinLevel(TLogLevel.Trace); // restore test-suite default
 end;
 
 initialization

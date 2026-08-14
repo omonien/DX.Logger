@@ -30,7 +30,8 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  System.Generics.Collections;
+  System.Generics.Collections,
+  System.SyncObjs;
 
 type
   /// <summary>
@@ -132,6 +133,15 @@ type
     class var FStartupBuffer: TList<TLogEntry>;
     class var FStartupDropCount: Cardinal;
     class var FStartupTimeoutMs: Cardinal;
+    // Fallback watchdog (see design doc "Fallback timer"): a single
+    // short-lived thread, armed on the first Instance access (and re-armed
+    // by ResetStartupStateForTesting), that closes the window on its own
+    // if nobody calls CompleteConfiguration in time. FWatchdogEvent is the
+    // thread's wait handle; CompleteConfiguration always signals it
+    // (idempotently) so an explicit/early close lets the thread exit
+    // immediately instead of sleeping out the rest of the timeout.
+    class var FWatchdogThread: TThread;
+    class var FWatchdogEvent: TEvent;
   private
     FProviders: TList<ILogProvider>;
     // The platform default provider, kept apart from FProviders so it can be
@@ -140,6 +150,21 @@ type
     FDefaultProvider: ILogProvider;
     FMemoryInfoCallback: TMemoryInfoCallback;
     FLogPropertiesCallback: TLogPropertiesCallback;
+
+    /// <summary>
+    /// Arms the fallback watchdog thread: creates a fresh FWatchdogEvent and
+    /// starts a thread that waits on it for FStartupTimeoutMs and calls
+    /// CompleteConfiguration on timeout. No-op when StartupTimeoutMs = 0 or
+    /// the window is already closed. Must only be called when no watchdog is
+    /// currently armed (callers first go through StopWatchdog).
+    /// </summary>
+    class procedure ArmWatchdog;
+
+    /// <summary>
+    /// Signals and joins any currently armed watchdog thread and frees both
+    /// the thread and its event. Safe to call when no watchdog is armed.
+    /// </summary>
+    class procedure StopWatchdog;
 
     constructor Create;
     class constructor Create;
@@ -266,21 +291,31 @@ function LogLevelToString(ALevel: TLogLevel): string;
 
 implementation
 
+// System.SyncObjs (needed here for TEvent, the watchdog's wait handle) now
+// lives in the INTERFACE uses clause instead — the private class var
+// FWatchdogEvent: TEvent is declared in the interface-section class body,
+// so the type must already be visible there, and Delphi treats the same
+// unit appearing in both an interface and implementation uses clause of
+// the same file as a redeclaration error (E2004). The platform units below
+// are mutually exclusive per target (exactly one of MSWINDOWS / ANDROID /
+// MACOS / LINUX is ever defined for a given build), so this remains a
+// syntactically valid single-entry (or two-entry, for MACOS) uses clause
+// on every supported platform without a dedicated anchor unit.
 uses
   {$IFDEF MSWINDOWS}
-  Winapi.Windows,
+  Winapi.Windows
   {$ENDIF}
   {$IFDEF ANDROID}
-  Androidapi.Log,
+  Androidapi.Log
   {$ENDIF}
   {$IFDEF MACOS}
 	Macapi.Helpers,
-	Macapi.Foundation,
+	Macapi.Foundation
   {$ENDIF}
   {$IFDEF LINUX}
-  Posix.Syslog,
+  Posix.Syslog
   {$ENDIF}
-  System.SyncObjs;
+  ;
 
 const
   // Startup configuration window (see docs/superpowers/specs/2026-08-14-
@@ -288,8 +323,7 @@ const
   // buffer; on overflow the newest entries are dropped (oldest boot lines
   // carry the highest diagnostic value).
   C_STARTUP_BUFFER_MAX = 10000;
-  // Default fallback watchdog timeout in milliseconds (watchdog itself is
-  // wired up in a later task; the default value already applies here).
+  // Default fallback watchdog timeout in milliseconds.
   C_DEFAULT_STARTUP_TIMEOUT_MS = 10000;
 
 type
@@ -387,24 +421,73 @@ end;
 
 class destructor TDXLogger.Destroy;
 begin
+  // Stop the watchdog first: signal + join + free it, so no watchdog thread
+  // can still be mid-timeout (or mid-CompleteConfiguration) while the rest
+  // of this teardown runs below.
+  StopWatchdog;
+
+  // Flush a still-open window (e.g. a short-lived CLI process that never
+  // called CompleteConfiguration and exits before the timeout) BEFORE
+  // freeing the instance/lock. CompleteConfiguration is idempotent, so this
+  // is also a safe no-op if the window was already closed.
+  //
+  // Finalization-order safety (named risk from the design doc, verified
+  // while implementing this task): provider units (DX.Logger.Provider.*)
+  // list DX.Logger in their `uses` clause, so per Delphi's unit
+  // finalization order (reverse of initialization order) their class
+  // destructors may well run BEFORE this one. That is safe here: every
+  // shipped provider (TFileLogProvider, TSeqLogProvider, TUILogProvider)
+  // follows the same pattern in its own `class destructor Destroy` --
+  // "During shutdown, just set to nil without freeing / The instance will
+  // be freed by the reference counting" -- i.e. it only nils its own
+  // singleton class-var pointer and never frees the provider object
+  // directly. The provider object itself stays alive purely through the
+  // ILogProvider interface reference held in FInstance.FProviders, so it is
+  // still fully live and functional at this point regardless of provider
+  // unit finalization order. The provider objects are only actually
+  // destroyed once FreeAndNil(FInstance) below releases FProviders
+  // (interface refcount reaching zero triggers e.g. TAsyncLogProvider's
+  // worker-thread shutdown) -- strictly AFTER this flush has dispatched to
+  // them. No hazard found; no guard beyond the existing interface-refcount
+  // discipline is needed.
+  CompleteConfiguration;
+
   FreeAndNil(FInstance);
   FreeAndNil(FStartupBuffer);
   FreeAndNil(FLock);
 end;
 
 class function TDXLogger.Instance: TDXLogger;
+var
+  LCreated: Boolean;
 begin
+  LCreated := False;
   if not Assigned(FInstance) then
   begin
     TMonitor.Enter(FLock);
     try
       if not Assigned(FInstance) then  // Double-checked locking
+      begin
         FInstance := TDXLogger.Create;
+        LCreated := True;
+      end;
     finally
       TMonitor.Exit(FLock);
     end;
   end;
   Result := FInstance;
+
+  // Arm the fallback watchdog on the very first Instance access (in
+  // practice: the first provider registration in a unit initialization
+  // section, or the first Log call). LCreated is True exactly once per
+  // process (guarded by the double-checked locking above), so this is
+  // naturally idempotent without needing a separate "already armed" flag.
+  // Deliberately done AFTER releasing FLock: ArmWatchdog creates and starts
+  // an OS thread, which must never happen while holding a lock that the
+  // watchdog thread's own body might need to re-acquire (it calls
+  // CompleteConfiguration on timeout, which takes FLock) — see ArmWatchdog.
+  if LCreated then
+    ArmWatchdog;
 end;
 
 class procedure TDXLogger.SetMinLevel(ALevel: TLogLevel);
@@ -655,6 +738,17 @@ begin
     Exit;
   end;
 
+  // Authoritative level guard for the closed-window path, mirroring the
+  // buffered branch's own MinLevel check just above. The cheap unlocked
+  // pre-filter at the very top of this method reads FWindowOpen (not
+  // FMinLevel) before the entry is built; in the narrow race where the
+  // window closes between that read and here, a below-MinLevel entry could
+  // otherwise reach the provider loop below unfiltered. Re-checking here —
+  // after LBuffered has authoritatively confirmed the window is closed —
+  // closes that gap.
+  if ALevel < FMinLevel then
+    Exit;
+
   // Window closed: unchanged single-loop dispatch to every registered
   // provider (including the default one), exactly as before the
   // configuration window existed.
@@ -676,7 +770,16 @@ var
   LProvider: ILogProvider;
   LEntry: TLogEntry;
   LWarnEntry: TLogEntry;
+  LWasOpen: Boolean;
 begin
+  // Defaults for the "already closed" path below, where these are never
+  // read; silences a spurious W1036 (the compiler's flow analysis cannot
+  // see that LWasOpen = True below implies they were assigned inside the
+  // lock, since the guarding Exit sits outside the try/finally).
+  LSnapshot := nil;
+  LDropCount := 0;
+  LMinLevel := TLogLevel.Trace;
+
   // Under the class lock: idempotent check-and-close, then snapshot + clear
   // the buffer and drop counter. LMinLevel is snapshotted here too — once,
   // alongside the buffer — so the entire replay batch below is filtered
@@ -687,18 +790,35 @@ begin
   // class state, instance monitor for provider dispatch.
   TMonitor.Enter(FLock);
   try
-    if not FWindowOpen then
-      Exit; // already closed: no-op, second and later calls are idempotent
+    LWasOpen := FWindowOpen;
+    if LWasOpen then
+    begin
+      FWindowOpen := False;
+      LSnapshot := FStartupBuffer.ToArray;
+      LDropCount := FStartupDropCount;
+      LMinLevel := FMinLevel;
+      FStartupBuffer.Clear;
+      FStartupDropCount := 0;
+    end;
 
-    FWindowOpen := False;
-    LSnapshot := FStartupBuffer.ToArray;
-    LDropCount := FStartupDropCount;
-    LMinLevel := FMinLevel;
-    FStartupBuffer.Clear;
-    FStartupDropCount := 0;
+    // CompleteConfiguration ALWAYS signals the watchdog event, on every
+    // call (including no-op idempotent calls on an already-closed window)
+    // — see the design doc's "Fallback timer" section. This lets a watchdog
+    // thread that is still waiting exit immediately instead of sleeping out
+    // the remainder of StartupTimeoutMs. Reading/signaling FWatchdogEvent
+    // under FLock (the same lock StopWatchdog uses to snapshot-and-clear
+    // it) guarantees we never call SetEvent on an event StopWatchdog has
+    // already freed: either this runs first and StopWatchdog still finds a
+    // live (soon-to-be-freed) event, or StopWatchdog already nil'd the
+    // class var first and we simply see Assigned = False here.
+    if Assigned(FWatchdogEvent) then
+      FWatchdogEvent.SetEvent;
   finally
     TMonitor.Exit(FLock);
   end;
+
+  if not LWasOpen then
+    Exit; // already closed before this call: no-op, second and later calls are idempotent
 
   LInstance := Instance;
 
@@ -738,6 +858,12 @@ end;
 
 class procedure TDXLogger.ResetStartupStateForTesting;
 begin
+  // Join + free any watchdog left over from a previous test/run BEFORE
+  // reopening the window, so at most one watchdog is ever armed at a time
+  // and the old thread cannot fire CompleteConfiguration concurrently with
+  // the state reset below.
+  StopWatchdog;
+
   TMonitor.Enter(FLock);
   try
     FWindowOpen := True;
@@ -747,8 +873,93 @@ begin
     TMonitor.Exit(FLock);
   end;
 
-  // TODO (later task): re-arm the fallback watchdog thread with the current
-  // StartupTimeoutMs. No-op placeholder until the watchdog is implemented.
+  // Re-arm with the current StartupTimeoutMs (no-op when 0).
+  ArmWatchdog;
+end;
+
+class procedure TDXLogger.ArmWatchdog;
+var
+  LTimeoutMs: Cardinal;
+  LEvent: TEvent;
+  LThread: TThread;
+begin
+  // Compute inputs and create the fresh TEvent under FLock (cheap,
+  // non-blocking) so a concurrent StopWatchdog/CompleteConfiguration can
+  // never observe a half-initialized FWatchdogEvent.
+  TMonitor.Enter(FLock);
+  try
+    LTimeoutMs := FStartupTimeoutMs;
+    if (LTimeoutMs = 0) or (not FWindowOpen) then
+      Exit; // disabled, or window already closed: nothing to guard
+
+    LEvent := TEvent.Create(nil, False, False, ''); // auto-reset, initially unsignaled
+    FWatchdogEvent := LEvent;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  // Creating and starting the thread happens OUTSIDE FLock by design: the
+  // watchdog body below waits on LEvent and, on timeout, calls
+  // CompleteConfiguration, which itself re-acquires FLock. Doing that while
+  // this method still held FLock would make the lock's hold time depend on
+  // OS thread-creation latency for no benefit, and ties the two operations
+  // together for a case that does not need it (TThread.Start merely resumes
+  // the new thread; its body runs asynchronously, not synchronously here,
+  // so there is no deadlock either way — but keeping thread creation outside
+  // any lock is the safer, simpler invariant to maintain as this code
+  // evolves). Only the final FWatchdogThread assignment below is briefly
+  // locked, matching how StopWatchdog reads/clears it.
+  LThread := TThread.CreateAnonymousThread(
+    procedure
+    begin
+      if LEvent.WaitFor(LTimeoutMs) = TWaitResult.wrTimeout then
+        CompleteConfiguration;
+      // wrSignaled (or any other result): CompleteConfiguration already
+      // ran/is running elsewhere, or the watchdog was stopped — exit
+      // without action either way.
+    end);
+  LThread.FreeOnTerminate := False; // joinable: StopWatchdog calls WaitFor + Free
+  LThread.Start;
+
+  TMonitor.Enter(FLock);
+  try
+    FWatchdogThread := LThread;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+end;
+
+class procedure TDXLogger.StopWatchdog;
+var
+  LThread: TThread;
+  LEvent: TEvent;
+begin
+  // Snapshot-and-clear under FLock so a concurrent CompleteConfiguration
+  // (which reads FWatchdogEvent under the same lock) can never be handed a
+  // pointer to an object we are about to free below.
+  TMonitor.Enter(FLock);
+  try
+    LThread := FWatchdogThread;
+    LEvent := FWatchdogEvent;
+    FWatchdogThread := nil;
+    FWatchdogEvent := nil;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  // Release the watchdog from its WaitFor first (it must never be joined
+  // while it could still be legitimately blocked for up to the full
+  // timeout), then join and free the thread, and finally free the event it
+  // was waiting on.
+  if Assigned(LEvent) then
+    LEvent.SetEvent;
+  if Assigned(LThread) then
+  begin
+    LThread.WaitFor;
+    LThread.Free;
+  end;
+  if Assigned(LEvent) then
+    LEvent.Free;
 end;
 
 { Global Functions }
@@ -812,7 +1023,7 @@ begin
   FWindowOpen := True;
   FStartupBuffer := TList<TLogEntry>.Create;
   FStartupDropCount := 0;
-  FStartupTimeoutMs := C_DEFAULT_STARTUP_TIMEOUT_MS; // watchdog wiring: later task
+  FStartupTimeoutMs := C_DEFAULT_STARTUP_TIMEOUT_MS;
 end;
 
 end.
