@@ -23,6 +23,16 @@
   Provider architecture:
     Additional log targets can be added by using provider units:
     uses DX.Logger.Provider.TextFile;  // Adds file logging
+
+  Startup behavior:
+    From process start, TDXLogger holds a configuration window: the platform
+    default provider above writes immediately, but every other registered
+    provider (File, Seq, UI, custom) receives nothing until
+    TDXLogger.CompleteConfiguration is called, StartupTimeoutMs (default
+    10 s) elapses, or the process shuts down. Early entries are buffered
+    (never lost) and replayed once the window closes. See
+    docs/CONFIGURATION.md ("Startup & Configuration Window") for the
+    recommended DPR layout.
 }
 
 interface

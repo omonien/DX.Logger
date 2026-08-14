@@ -22,6 +22,13 @@ unit DX.Logger.Provider.Seq;
     - Automatic batching of log events
     - CLEF (Compact Log Event Format) support
     - Configurable batch size and flush interval
+
+  Startup behavior:
+    Unlike DX.Logger.Provider.TextFile, this provider does not register
+    itself on unit initialization -- it must be registered explicitly (as
+    shown above). Once registered, entries are delivered once
+    TDXLogger.CompleteConfiguration closes the configuration window (or the
+    startup timeout elapses).
 }
 
 interface

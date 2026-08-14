@@ -120,6 +120,48 @@ The `Details` parameter in log functions provides additional contextual informat
 
 This design allows each provider to optimize details handling for its specific use case while maintaining a consistent API.
 
+## Startup & Configuration Window
+
+Providers such as `TFileLogProvider` and `TSeqLogProvider` register themselves in their unit's `initialization` section and become active immediately with default settings — before your DPR gets a chance to call `SetLogFileName`, `SetMinLevel`, etc. To keep early entries from being written to the wrong target (or racing a not-yet-configured provider), `TDXLogger` opens a **configuration window** from process start:
+
+| Situation | Default provider | All other registered providers |
+|---|---|---|
+| Window **open** | writes immediately (current `MinLevel` applies, as today) | receive **nothing**; every entry is appended to the startup buffer (unfiltered, all levels) |
+| Window **closes** | unchanged | buffered entries are replayed **in original order**, filtered with the `MinLevel` valid *at close time*; buffer is discarded afterwards |
+| Window **closed** | unchanged | live dispatch, as today |
+
+Close the window explicitly by calling `TDXLogger.CompleteConfiguration` as the first statement(s) after `begin`, once all providers are configured:
+
+```pascal
+program MyApp;
+
+uses
+  // Memory managers (FastMM etc.) first — they must not depend on DX.Logger.
+  // Then the logger and ALL provider units, before anything else, so their
+  // initialization runs as early as possible:
+  DX.Logger,
+  DX.Logger.Provider.TextFile,
+  Vcl.Forms,
+  { ... },
+  Main.Form in 'Main.Form.pas';
+
+begin
+  // Configure providers first, then close the configuration window.
+  // Without CompleteConfiguration the window auto-closes after
+  // TDXLogger.StartupTimeoutMs (default: 10 s) or at process shutdown —
+  // early entries are never lost either way.
+  TFileLogProvider.SetLogFileName('LOG\MyApp.log');
+  TDXLogger.SetMinLevel(TLogLevel.Trace);
+  TDXLogger.CompleteConfiguration;
+  Application.Initialize;
+  { ... }
+end.
+```
+
+If your DPR never calls `CompleteConfiguration` explicitly — or a UI provider is only bound later (e.g. in `FormCreate`) — the window still closes automatically after `TDXLogger.StartupTimeoutMs` (default `10000` ms), or at the latest during process shutdown. Early entries are never lost either way; unadapted existing applications just see non-default-provider output appear up to `StartupTimeoutMs` later than before.
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#startup--configuration-window) for the full picture, including `StartupTimeoutMs` semantics, UI-provider timing, and notes for custom-provider authors.
+
 ## Providers
 
 ### File Provider
