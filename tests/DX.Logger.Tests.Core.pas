@@ -95,6 +95,8 @@ type
     procedure TestBufferOverflowDropsNewestAndWarnsOnReplay;
     [Test]
     procedure TestCompleteConfigurationFromWorkerThread;
+    [Test]
+    procedure TestNoEntryLostWhenClosingConcurrently;
   end;
 
 implementation
@@ -759,6 +761,61 @@ begin
   finally
     LEvent.Free;
   end;
+end;
+
+// Regression test for the TOCTOU race fixed in fix round 1 (Log read the
+// window flag, built the entry, then re-acquired the lock and appended
+// based on a now-stale flag — an entry could land in FStartupBuffer right
+// after CompleteConfiguration had already snapshotted and cleared it,
+// silently losing it forever for non-default providers). A worker thread
+// logs a tight burst of uniquely-numbered entries while the main thread
+// closes the window concurrently; every entry must arrive at the mock
+// exactly once, whether via the startup replay or live post-close
+// dispatch — none may vanish into the gap between the two.
+procedure TDXLoggerTests.TestNoEntryLostWhenClosingConcurrently;
+const
+  C_ITERATIONS = 2000;
+var
+  LWorker: TThread;
+  LDone: TEvent;
+  LSignaled: Boolean;
+begin
+  TDXLogger.ResetStartupStateForTesting;
+  FMockProvider.Clear; // mock is already registered via Setup, before the worker starts
+
+  LDone := TEvent.Create(nil, True, False, '');
+  try
+    LWorker := TThread.CreateAnonymousThread(
+      procedure
+      var
+        i: Integer;
+      begin
+        for i := 0 to C_ITERATIONS - 1 do
+          DXLog(Format('race-%d', [i]));
+        LDone.SetEvent;
+      end);
+    LWorker.FreeOnTerminate := False;
+    try
+      LWorker.Start;
+
+      TThread.Sleep(5); // let the worker get into its logging loop before closing
+      TDXLogger.CompleteConfiguration;
+
+      LSignaled := LDone.WaitFor(5000) = wrSignaled;
+      Assert.IsTrue(LSignaled, 'Worker thread should finish logging 2000 entries within 5 seconds');
+      LWorker.WaitFor; // join: guarantee the thread object is fully done before Free
+    finally
+      LWorker.Free;
+    end;
+  finally
+    LDone.Free;
+  end;
+
+  Assert.AreEqual(C_ITERATIONS, FMockProvider.GetEntryCount,
+    'Every entry must arrive exactly once (replayed or live-dispatched) — none lost to the TOCTOU race');
+  Assert.AreEqual('race-0', FMockProvider.GetEntry(0).Message);
+  Assert.AreEqual(Format('race-%d', [C_ITERATIONS - 1]), FMockProvider.GetLastEntry.Message);
+  // Window is closed at this point (CompleteConfiguration ran above) — state left as required.
 end;
 
 initialization

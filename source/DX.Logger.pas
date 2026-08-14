@@ -130,7 +130,7 @@ type
     // TDXLogger instance.
     class var FWindowOpen: Boolean;
     class var FStartupBuffer: TList<TLogEntry>;
-    class var FStartupDropCount: Integer;
+    class var FStartupDropCount: Cardinal;
     class var FStartupTimeoutMs: Cardinal;
   private
     FProviders: TList<ILogProvider>;
@@ -564,6 +564,7 @@ var
   LProvider: ILogProvider;
   LCallbackProps: TArray<TPair<string, string>>;
   LWindowOpen: Boolean;
+  LBuffered: Boolean;
 begin
   // Startup configuration window: while open, the entry must be built and
   // buffered regardless of MinLevel (a later SetMinLevel(Trace) must still
@@ -571,6 +572,12 @@ begin
   // behavior is exactly as before the window existed: skip everything below
   // MinLevel right here. So the early-out below only fires when the window
   // is closed AND the level is filtered.
+  //
+  // This is a CHEAP PRE-FILTER only — a stale read here (window closes a
+  // moment later) merely wastes building an entry that turns out to be
+  // filtered; it can never lose data. The authoritative, race-free check is
+  // the one immediately before the buffer append below, which re-reads
+  // FWindowOpen under the same FLock that guards the append itself.
   TMonitor.Enter(FLock);
   try
     LWindowOpen := FWindowOpen;
@@ -616,22 +623,33 @@ begin
     end;
   end;
 
-  if LWindowOpen then
-  begin
-    // Buffer unfiltered (regardless of MinLevel) so a later SetMinLevel
-    // still recovers early entries at replay time. Only the default
-    // provider writes immediately, and only if the current MinLevel allows
-    // it — all other registered providers receive nothing while open.
-    TMonitor.Enter(FLock);
-    try
+  // Authoritative, atomic check-and-act: re-read FWindowOpen under the same
+  // FLock that guards the buffer mutation, so the "is the window still
+  // open" decision and the buffer append happen as one indivisible step
+  // with respect to CompleteConfiguration (which closes + snapshots + clears
+  // under this very same lock). Without this re-check, an entry built while
+  // the window looked open could still land in FStartupBuffer *after*
+  // CompleteConfiguration already took its snapshot and cleared it — silent
+  // permanent loss for every non-default provider.
+  TMonitor.Enter(FLock);
+  try
+    LBuffered := FWindowOpen;
+    if LBuffered then
+    begin
       if FStartupBuffer.Count >= C_STARTUP_BUFFER_MAX then
         Inc(FStartupDropCount) // buffer full: drop the newest entry, keep the oldest ones
       else
         FStartupBuffer.Add(LEntry);
-    finally
-      TMonitor.Exit(FLock);
     end;
+  finally
+    TMonitor.Exit(FLock);
+  end;
 
+  if LBuffered then
+  begin
+    // Only the default provider writes immediately, and only if the
+    // current MinLevel allows it — all other registered providers receive
+    // nothing while the window is (still, as of the check above) open.
     if (ALevel >= FMinLevel) and Assigned(FDefaultProvider) then
       FDefaultProvider.Log(LEntry);
     Exit;
@@ -652,17 +670,21 @@ end;
 class procedure TDXLogger.CompleteConfiguration;
 var
   LSnapshot: TArray<TLogEntry>;
-  LDropCount: Integer;
+  LDropCount: Cardinal;
+  LMinLevel: TLogLevel;
   LInstance: TDXLogger;
   LProvider: ILogProvider;
   LEntry: TLogEntry;
   LWarnEntry: TLogEntry;
 begin
   // Under the class lock: idempotent check-and-close, then snapshot + clear
-  // the buffer and drop counter. Kept separate from the replay dispatch
-  // below (which needs the instance monitor) to mirror the discipline used
-  // elsewhere: class-level lock for class state, instance monitor for
-  // provider dispatch.
+  // the buffer and drop counter. LMinLevel is snapshotted here too — once,
+  // alongside the buffer — so the entire replay batch below is filtered
+  // with one consistent value instead of re-reading the live FMinLevel per
+  // entry (which could itself change concurrently while replay is running).
+  // Kept separate from the replay dispatch below (which needs the instance
+  // monitor) to mirror the discipline used elsewhere: class-level lock for
+  // class state, instance monitor for provider dispatch.
   TMonitor.Enter(FLock);
   try
     if not FWindowOpen then
@@ -671,6 +693,7 @@ begin
     FWindowOpen := False;
     LSnapshot := FStartupBuffer.ToArray;
     LDropCount := FStartupDropCount;
+    LMinLevel := FMinLevel;
     FStartupBuffer.Clear;
     FStartupDropCount := 0;
   finally
@@ -687,7 +710,7 @@ begin
     // the default provider already wrote each entry immediately when it was
     // logged.
     for LEntry in LSnapshot do
-      if LEntry.Level >= FMinLevel then
+      if LEntry.Level >= LMinLevel then
         for LProvider in LInstance.FProviders do
           if LProvider <> LInstance.FDefaultProvider then
             LProvider.Log(LEntry);
