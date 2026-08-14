@@ -66,6 +66,11 @@ begin
   TFileLogProvider.SetLogFileName('myapp.log');
   TFileLogProvider.SetMaxFileSize(10 * 1024 * 1024); // 10 MB
 
+  // Close the startup window so the file provider writes immediately
+  // instead of buffering until StartupTimeoutMs (see "Startup & Configuration
+  // Window" below).
+  TDXLogger.CompleteConfiguration;
+
   DXLog('Application started');
   // ... your code
   DXLog('Application stopped');
@@ -188,6 +193,10 @@ TFileLogProvider.SetMaxFileSize(5 * 1024 * 1024); // 5 MB
 
 // Register provider
 TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
+
+// Close the startup window so buffered entries are replayed immediately
+// instead of after StartupTimeoutMs (see "Startup & Configuration Window" above).
+TDXLogger.CompleteConfiguration;
 ```
 
 When the log file reaches the maximum size, it's automatically renamed with a timestamp and a new file is created.
@@ -219,6 +228,10 @@ TSeqLogProvider.SetFlushInterval(5000);  // Default: 2000 ms
 
 // Register provider
 TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
+
+// Close the startup window so buffered entries are replayed immediately
+// instead of after StartupTimeoutMs (see "Startup & Configuration Window" above).
+TDXLogger.CompleteConfiguration;
 
 // Use logging as normal
 DXLog('Application started');
@@ -252,6 +265,12 @@ uses
 TUILogProvider.Instance.ExternalStrings := MemoInfo.Lines;
 TUILogProvider.Instance.AppendOnTop := False;  // False = append at bottom (default)
 TDXLogger.Instance.RegisterProvider(TUILogProvider.Instance);
+
+// Binding here (e.g. FormCreate) relies on the startup window's fallback
+// timer (StartupTimeoutMs, default 10 s) to replay buffered boot lines into
+// the memo — or call TDXLogger.CompleteConfiguration explicitly once every
+// provider is configured. See "Startup & Configuration Window" above and
+// docs/CONFIGURATION.md#ui-providers for both patterns.
 
 // Use logging as normal
 DXLog('Application started');

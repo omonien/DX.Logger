@@ -40,6 +40,10 @@ begin
   TSeqLogProvider.SetApiKey('your-api-key-here');
 
   TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
+
+  // Close the startup window so buffered entries are replayed immediately
+  // instead of after StartupTimeoutMs (see "Startup & Configuration Window" below).
+  TDXLogger.CompleteConfiguration;
 end;
 ```
 
@@ -79,6 +83,10 @@ end;
 begin
   LoadSeqConfig;
   TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
+
+  // Close the startup window so buffered entries are replayed immediately
+  // instead of after StartupTimeoutMs (see "Startup & Configuration Window" below).
+  TDXLogger.CompleteConfiguration;
 end;
 ```
 
