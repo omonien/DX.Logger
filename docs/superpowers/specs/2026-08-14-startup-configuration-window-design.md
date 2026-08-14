@@ -4,7 +4,7 @@
 
 ## Problem
 
-Providers such as `TFileLogProvider` and `TSeqLogProvider` register themselves with `TDXLogger` in their unit `initialization` section and become active immediately — with *default* configuration (e.g. log file `<AppName>.log` next to the executable, 10 MB rotation). Application-specific configuration (`SetLogFileName`, `SetMaxFileSize`, `SetMinLevel`, Seq server URL …) can run at the earliest in the DPR body, i.e. *after* the first log calls are possible.
+`TFileLogProvider` registers itself with `TDXLogger` in its unit `initialization` section and becomes active immediately — with *default* configuration (e.g. log file `<AppName>.log` next to the executable, 10 MB rotation). `TSeqLogProvider` and `TUILogProvider` do not self-register; their `initialization` sections (where present) only set internal defaults, and registering them with `TDXLogger` is left to the host application (typically in the DPR body, alongside their other configuration calls). Application-specific configuration (`SetLogFileName`, `SetMaxFileSize`, `SetMinLevel`, Seq server URL …) can run at the earliest in the DPR body, i.e. *after* the first log calls are already possible for self-registering providers.
 
 Consequences observed in production (SDE-Zielsteuerungen):
 
@@ -79,7 +79,7 @@ Buffer and window state are guarded by the existing lock regime (`TMonitor` on t
 
 ## Provider impact
 
-**None.** `TFileLogProvider` and `TSeqLogProvider` keep registering in their `initialization` sections; the core simply withholds entries until the window closes. The rename heuristic in `SetLogFileName` remains as a safety net for post-close configuration but becomes irrelevant in the documented flow (no file has been written before the close). Unit header documentation is updated.
+**None.** `TFileLogProvider` keeps self-registering in its `initialization` section; `TSeqLogProvider` and `TUILogProvider` keep being registered explicitly by the host application, unchanged. Either way, the core simply withholds entries until the window closes. The rename heuristic in `SetLogFileName` remains as a safety net for post-close configuration but becomes irrelevant in the documented flow (no file has been written before the close). Unit header documentation is updated.
 
 ## Behavior changes (intentional)
 

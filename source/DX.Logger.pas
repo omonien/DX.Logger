@@ -176,6 +176,16 @@ type
     /// </summary>
     class procedure StopWatchdog;
 
+    /// <summary>
+    /// Setter backing the StartupTimeoutMs property. When the configuration
+    /// window is still open and the value actually changes, re-arms the
+    /// fallback watchdog with the new timeout (StopWatchdog + ArmWatchdog).
+    /// See the implementation for the full ordering rationale. Declared
+    /// `static` -- required by the compiler for a class property accessor
+    /// (E2355) since it needs no implicit Self.
+    /// </summary>
+    class procedure SetStartupTimeoutMs(AValue: Cardinal); static;
+
     constructor Create;
     class constructor Create;
     class destructor Destroy;
@@ -215,9 +225,14 @@ type
     class procedure SetMinLevel(ALevel: TLogLevel);
 
     /// <summary>
-    /// Returns True when a message at ALevel would be emitted (i.e. the
-    /// current MinLevel allows it). Callers can use this to skip expensive
-    /// message/parameter construction when the log would otherwise be dropped.
+    /// Returns True when a message at ALevel would be emitted -- i.e. either
+    /// the current MinLevel allows it, OR the startup configuration window
+    /// is still open (in which case Log buffers every level unfiltered
+    /// regardless of MinLevel; see the "Startup behavior" section in this
+    /// unit's header). Callers can use this to skip expensive
+    /// message/parameter construction when the log would otherwise be
+    /// dropped -- while the window is open, nothing is dropped, so building
+    /// the message is never skipped.
     /// </summary>
     class function IsLevelEnabled(ALevel: TLogLevel): Boolean;
 
@@ -233,9 +248,17 @@ type
     /// <summary>
     /// Fallback timeout for the configuration window in milliseconds.
     /// Default 10000. 0 disables auto-close (explicit CompleteConfiguration or
-    /// process shutdown only). Effective while the window is open.
+    /// process shutdown only). Effective while the window is open: assigning
+    /// a new value while the window is still open re-arms the fallback
+    /// watchdog with that new timeout, so a DPR-body assignment actually
+    /// takes effect even though the watchdog was already armed earlier (at
+    /// the first TDXLogger.Instance access). Assigning it after the window
+    /// has closed only updates the stored value for a future
+    /// ResetStartupStateForTesting call (test support only) -- no watchdog
+    /// exists to re-arm. Intended to be set once, early and single-threaded
+    /// (e.g. one of the first lines of the DPR) -- see docs/CONFIGURATION.md.
     /// </summary>
-    class property StartupTimeoutMs: Cardinal read FStartupTimeoutMs write FStartupTimeoutMs;
+    class property StartupTimeoutMs: Cardinal read FStartupTimeoutMs write SetStartupTimeoutMs;
 
     /// <summary>
     /// TEST SUPPORT ONLY: reopens the configuration window, clears the startup
@@ -507,7 +530,23 @@ end;
 
 class function TDXLogger.IsLevelEnabled(ALevel: TLogLevel): Boolean;
 begin
-  Result := ALevel >= FMinLevel;
+  // Critical fix (final-review finding): while the startup configuration
+  // window is open, Log buffers EVERY level unfiltered (see the window-open
+  // branch in Log) -- MinLevel only applies to the default provider's
+  // immediate output and to the replay at close time. Answering this query
+  // purely from FMinLevel would make the documented
+  //   if IsLevelEnabled(ALevel) then DXLog(Msg, ALevel, BuildExpensive())
+  // guard pattern skip the call entirely for e.g. Trace/Debug under a
+  // release-default MinLevel of Info -- so the entry would never even reach
+  // the buffer, a silent, permanent loss of exactly the boot diagnostics the
+  // window exists to preserve.
+  //
+  // Unlocked read of FWindowOpen is acceptable here: a stale read (window
+  // closes a moment later) only causes one harmless extra message build --
+  // it can never cause a level check to wrongly report "disabled" and
+  // thereby lose an entry, because Log's own authoritative check happens
+  // under FLock immediately before the buffer append.
+  Result := (ALevel >= FMinLevel) or FWindowOpen;
 end;
 
 {$IFDEF MSWINDOWS}
@@ -743,8 +782,24 @@ begin
     // Only the default provider writes immediately, and only if the
     // current MinLevel allows it — all other registered providers receive
     // nothing while the window is (still, as of the check above) open.
+    //
+    // Thread-safety fix (final-review finding): guard the call with the
+    // same instance monitor used by the closed-window dispatch loop below
+    // and by RegisterProvider/UnregisterProvider. Without this, concurrent
+    // threads logging while the window is open could interleave inside the
+    // default provider's own Log (e.g. TDefaultLogProvider's WriteLn calls)
+    // -- a thread-safety regression versus both the closed-window path and
+    // the pre-window-feature behavior, where every provider call already
+    // went through this same monitor.
     if (ALevel >= FMinLevel) and Assigned(FDefaultProvider) then
-      FDefaultProvider.Log(LEntry);
+    begin
+      TMonitor.Enter(Self);
+      try
+        FDefaultProvider.Log(LEntry);
+      finally
+        TMonitor.Exit(Self);
+      end;
+    end;
     Exit;
   end;
 
@@ -795,6 +850,8 @@ var
   LMinLevel: TLogLevel;
   LInstance: TDXLogger;
   LProvider: ILogProvider;
+  LProviderList: TList<ILogProvider>;
+  LProviderSnapshot: TArray<ILogProvider>;
   LEntry: TLogEntry;
   LWarnEntry: TLogEntry;
   LWasOpen: Boolean;
@@ -849,37 +906,82 @@ begin
 
   LInstance := Instance;
 
+  // Deadlock-class fix (final-review finding, controller ruling): snapshot
+  // the non-default provider list under the instance monitor -- consistent
+  // with RegisterProvider/UnregisterProvider, which also guard FProviders
+  // with TMonitor.Enter(Self) -- then release the monitor BEFORE dispatching
+  // any entry below. Previously the whole replay ran while the monitor was
+  // held.
+  //
+  // Why that was a hazard: a bound provider's Log can block the calling
+  // thread for an unbounded time -- e.g. the UI provider's underlying
+  // TAsyncLogProvider enqueues onto its worker thread with PushItem using an
+  // INFINITE wait timeout against a bounded queue depth (1000), and that
+  // worker thread in turn calls TThread.Synchronize to mutate the bound
+  // TStrings on the main thread. If CompleteConfiguration is itself called
+  // from the main thread while still holding TMonitor.Enter(LInstance), and
+  // the async queue is full, the main thread blocks inside PushItem while
+  // the worker thread blocks inside Synchronize waiting for that very same
+  // main thread -- a deadlock. Releasing the monitor before dispatch removes
+  // the hazard entirely without requiring every provider to promise it never
+  // blocks.
   TMonitor.Enter(LInstance);
   try
-    // Replay in original order, filtered with the MinLevel valid now (at
-    // close time) — not the MinLevel that was in effect when each entry was
-    // originally logged. Every provider except the default one takes part;
-    // the default provider already wrote each entry immediately when it was
-    // logged.
-    for LEntry in LSnapshot do
-      if LEntry.Level >= LMinLevel then
-        for LProvider in LInstance.FProviders do
-          if LProvider <> LInstance.FDefaultProvider then
-            LProvider.Log(LEntry);
-
-    if LDropCount > 0 then
-    begin
-      // One final synthetic warning so the operator knows startup entries
-      // were lost, sent to the same providers as the replay above.
-      LWarnEntry.Timestamp := Now;
-      LWarnEntry.Level := TLogLevel.Warn;
-      LWarnEntry.Message := Format('DX.Logger: %d startup log entries were dropped (startup buffer full)', [LDropCount]);
-      LWarnEntry.Details := '';
-      LWarnEntry.ThreadID := TThread.CurrentThread.ThreadID;
-      LWarnEntry.MemoryInfo := '';
-      LWarnEntry.Properties := nil;
-
+    LProviderList := TList<ILogProvider>.Create;
+    try
       for LProvider in LInstance.FProviders do
         if LProvider <> LInstance.FDefaultProvider then
-          LProvider.Log(LWarnEntry);
+          LProviderList.Add(LProvider);
+      LProviderSnapshot := LProviderList.ToArray;
+    finally
+      LProviderList.Free;
     end;
   finally
     TMonitor.Exit(LInstance);
+  end;
+
+  // Dispatch OUTSIDE the instance monitor, against the snapshot copy taken
+  // above.
+  //
+  // Accepted trade-off (documented here and in docs/CONFIGURATION.md,
+  // "Startup & Configuration Window"): once the monitor is released, a live
+  // entry logged concurrently on another thread (window already closed at
+  // that point, so it goes straight to the closed-window dispatch path in
+  // Log) can reach a provider's Log before the tail of this replay does --
+  // there is no ordering guarantee between "replay still in progress" and
+  // "live dispatch after close" beyond what each entry's Timestamp already
+  // records. This narrow reordering window only affects the *relative order
+  // in which a provider observes entries* right at the close boundary; it
+  // never causes loss or duplication -- every entry in LSnapshot is
+  // dispatched exactly once, from this dedicated copy, regardless of what
+  // else runs concurrently. The window-close/buffer-snapshot step above
+  // (under FLock) is unaffected and remains the sole source of truth for
+  // which entries were buffered.
+  //
+  // Replay in original order, filtered with the MinLevel valid now (at
+  // close time) — not the MinLevel that was in effect when each entry was
+  // originally logged. Every provider except the default one takes part;
+  // the default provider already wrote each entry immediately when it was
+  // logged.
+  for LEntry in LSnapshot do
+    if LEntry.Level >= LMinLevel then
+      for LProvider in LProviderSnapshot do
+        LProvider.Log(LEntry);
+
+  if LDropCount > 0 then
+  begin
+    // One final synthetic warning so the operator knows startup entries
+    // were lost, sent to the same providers as the replay above.
+    LWarnEntry.Timestamp := Now;
+    LWarnEntry.Level := TLogLevel.Warn;
+    LWarnEntry.Message := Format('DX.Logger: %d startup log entries were dropped (startup buffer full)', [LDropCount]);
+    LWarnEntry.Details := '';
+    LWarnEntry.ThreadID := TThread.CurrentThread.ThreadID;
+    LWarnEntry.MemoryInfo := '';
+    LWarnEntry.Properties := nil;
+
+    for LProvider in LProviderSnapshot do
+      LProvider.Log(LWarnEntry);
   end;
 end;
 
@@ -902,6 +1004,62 @@ begin
 
   // Re-arm with the current StartupTimeoutMs (no-op when 0).
   ArmWatchdog;
+end;
+
+class procedure TDXLogger.SetStartupTimeoutMs(AValue: Cardinal);
+var
+  LWindowOpen: Boolean;
+  LChanged: Boolean;
+begin
+  // Read-decide-write under FLock, consistent with how every other piece of
+  // class state (FWindowOpen, FStartupBuffer, ...) is guarded. This makes
+  // the "did the value actually change" check race-free against a
+  // concurrent caller of this same setter, and the FWindowOpen snapshot
+  // below race-free against CompleteConfiguration closing the window at the
+  // same moment (worst case if that race is lost: we still re-arm a
+  // watchdog that CompleteConfiguration's own FWatchdogEvent.SetEvent call
+  // -- also taken under FLock, see CompleteConfiguration -- immediately
+  // releases again, same outcome as any other watchdog losing that race).
+  TMonitor.Enter(FLock);
+  try
+    LChanged := AValue <> FStartupTimeoutMs;
+    FStartupTimeoutMs := AValue;
+    LWindowOpen := FWindowOpen;
+  finally
+    TMonitor.Exit(FLock);
+  end;
+
+  // Re-arm OUTSIDE FLock, and only when the window is still open and the
+  // value actually changed. Without this, a DPR-body assignment to
+  // StartupTimeoutMs made after the first TDXLogger.Instance access (which
+  // is when the watchdog is originally armed, with whatever value was in
+  // FStartupTimeoutMs at that time -- see Instance/ArmWatchdog) would be
+  // silently ineffective: the already-running watchdog keeps waiting out
+  // its original timeout. That was exactly the bug this fix closes -- the
+  // documented DPR pattern of setting StartupTimeoutMs as an early
+  // statement did nothing, because arming already happened during unit
+  // initialization, before the DPR body ever runs.
+  //
+  // StopWatchdog + ArmWatchdog must run outside FLock: StopWatchdog blocks
+  // on LThread.WaitFor for the *old* watchdog thread, which may itself need
+  // to re-acquire FLock to finish (e.g. inside CompleteConfiguration if it
+  // is mid-timeout right now) -- holding FLock across that WaitFor would
+  // deadlock the two threads against each other. Calling StopWatchdog then
+  // ArmWatchdog sequentially from one thread, with no lock held across the
+  // two calls, is already proven safe by ResetStartupStateForTesting, which
+  // does exactly the same two calls in the same order.
+  //
+  // Caveat (mirrors the ordering note already documented on ArmWatchdog):
+  // this assumes StartupTimeoutMs is set from a single thread, as
+  // documented (one of the first lines of the DPR). Concurrent callers of
+  // this setter from two different threads while the window is open are
+  // not guarded against interleaving with each other's
+  // StopWatchdog/ArmWatchdog pair -- no code path does that today.
+  if LWindowOpen and LChanged then
+  begin
+    StopWatchdog;
+    ArmWatchdog;
+  end;
 end;
 
 class procedure TDXLogger.ArmWatchdog;

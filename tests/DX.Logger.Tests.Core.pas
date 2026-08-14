@@ -103,6 +103,10 @@ type
     procedure TestStartupTimeoutZeroDisablesAutoClose;
     [Test]
     procedure TestClosedWindowFallThroughRespectsMinLevel;
+    [Test]
+    procedure TestIsLevelEnabledTrueWhileWindowOpen;
+    [Test]
+    procedure TestStartupTimeoutChangeRearmsWhileOpen;
   end;
 
 implementation
@@ -196,6 +200,18 @@ begin
     FMockProviderIntf := nil; // Release interface first
   end;
   FMockProvider := nil; // Then clear class reference
+
+  // Unconditional, failure-safe global-state restore (final-review finding):
+  // a mid-test assertion failure aborts the test body before its own
+  // trailing cleanup runs (e.g. TestWatchdogClosesWindowAfterTimeout's own
+  // "restore StartupTimeoutMs := 0" at the very end), which would otherwise
+  // leave the configuration window open or a short watchdog still armed for
+  // every unrelated test that runs afterward in the same binary (e.g. the
+  // Seq/File provider tests assume a closed window and immediate dispatch).
+  // Both calls are idempotent/safe even when a test's own cleanup already
+  // did the same thing, so running them here unconditionally is harmless.
+  TDXLogger.CompleteConfiguration;
+  TDXLogger.StartupTimeoutMs := 0;
 end;
 
 procedure TDXLoggerTests.TestSingletonInstance;
@@ -778,6 +794,21 @@ end;
 // closes the window concurrently; every entry must arrive at the mock
 // exactly once, whether via the startup replay or live post-close
 // dispatch — none may vanish into the gap between the two.
+//
+// Assertion scope narrowed (final-review finding on CompleteConfiguration,
+// controller ruling): the replay dispatch loop now runs OUTSIDE the
+// instance monitor (see the dispatch-site comment in DX.Logger.pas and
+// docs/CONFIGURATION.md, "Startup & Configuration Window") to remove a
+// deadlock class with blocking/UI-bound providers. One accepted consequence
+// is that the replay loop and this worker thread's concurrent live-dispatch
+// calls are no longer mutually exclusive with each other, so entries can
+// arrive at the mock in an order that freely interleaves replay and live
+// dispatch — this test previously (incorrectly, given the new contract)
+// asserted 'race-0' first and 'race-1999' last, which no longer holds.
+// What the fix still guarantees, and what remains asserted below, is
+// completeness: every one of the C_ITERATIONS uniquely-numbered entries is
+// delivered exactly once, regardless of which path delivered it or in what
+// order.
 procedure TDXLoggerTests.TestNoEntryLostWhenClosingConcurrently;
 const
   C_ITERATIONS = 2000;
@@ -785,6 +816,10 @@ var
   LWorker: TThread;
   LDone: TEvent;
   LSignaled: Boolean;
+  LSeen: array of Boolean;
+  i: Integer;
+  LIndex: Integer;
+  LMessage: string;
 begin
   TDXLogger.ResetStartupStateForTesting;
   FMockProvider.Clear; // mock is already registered via Setup, before the worker starts
@@ -819,8 +854,22 @@ begin
 
   Assert.AreEqual(C_ITERATIONS, FMockProvider.GetEntryCount,
     'Every entry must arrive exactly once (replayed or live-dispatched) — none lost to the TOCTOU race');
-  Assert.AreEqual('race-0', FMockProvider.GetEntry(0).Message);
-  Assert.AreEqual(Format('race-%d', [C_ITERATIONS - 1]), FMockProvider.GetLastEntry.Message);
+
+  // Completeness check (order across the replay/live-dispatch boundary is
+  // deliberately not asserted — see the comment above this test): every
+  // race-N message for N in 0..C_ITERATIONS-1 must appear, and none twice.
+  SetLength(LSeen, C_ITERATIONS);
+  for i := 0 to FMockProvider.GetEntryCount - 1 do
+  begin
+    LMessage := FMockProvider.GetEntry(i).Message;
+    Assert.IsTrue(LMessage.StartsWith('race-'), Format('Unexpected message "%s" at position %d', [LMessage, i]));
+    LIndex := StrToInt(LMessage.Substring(5));
+    Assert.IsTrue((LIndex >= 0) and (LIndex < C_ITERATIONS), Format('Message index out of range: %s', [LMessage]));
+    Assert.IsFalse(LSeen[LIndex], Format('Entry race-%d must not be delivered twice', [LIndex]));
+    LSeen[LIndex] := True;
+  end;
+  for i := 0 to C_ITERATIONS - 1 do
+    Assert.IsTrue(LSeen[i], Format('Entry race-%d must not be lost', [i]));
   // Window is closed at this point (CompleteConfiguration ran above) — state left as required.
 end;
 
@@ -913,6 +962,70 @@ begin
     'At-MinLevel entry must reach providers on the closed-window path');
 
   TDXLogger.SetMinLevel(TLogLevel.Trace); // restore test-suite default
+end;
+
+// Critical fix (final-review finding): while the configuration window is
+// open, IsLevelEnabled must report True for every level regardless of
+// MinLevel -- otherwise the documented
+//   if IsLevelEnabled(ALevel) then DXLog(Msg, ALevel, BuildExpensive())
+// guard pattern would skip building (and therefore buffering) early
+// low-level entries under a release-default MinLevel, silently losing them
+// before the window even gets a chance to replay them.
+procedure TDXLoggerTests.TestIsLevelEnabledTrueWhileWindowOpen;
+begin
+  TDXLogger.ResetStartupStateForTesting; // window open
+  TDXLogger.SetMinLevel(TLogLevel.Info);
+
+  Assert.IsTrue(TDXLogger.IsLevelEnabled(TLogLevel.Trace),
+    'IsLevelEnabled must report True for every level while the window is open, regardless of MinLevel');
+
+  TDXLogger.CompleteConfiguration;
+
+  Assert.IsFalse(TDXLogger.IsLevelEnabled(TLogLevel.Trace),
+    'Once the window is closed, IsLevelEnabled must fall back to plain MinLevel filtering');
+
+  TDXLogger.SetMinLevel(TLogLevel.Trace); // restore test-suite default
+end;
+
+// Important fix (final-review finding, controller ruling): assigning
+// StartupTimeoutMs while the window is still open must re-arm the fallback
+// watchdog with the new value -- previously the watchdog captured its
+// timeout once, at arm time (the first TDXLogger.Instance access, which
+// happens during provider unit initialization, i.e. before the DPR body
+// ever runs), so the documented DPR-body pattern
+// "TDXLogger.StartupTimeoutMs := 3000;" silently did nothing. This starts
+// with no watchdog armed (timeout 0), buffers one entry, then changes the
+// timeout to a small positive value while the window is still open and
+// polls for the watchdog to fire and replay the buffered entry.
+procedure TDXLoggerTests.TestStartupTimeoutChangeRearmsWhileOpen;
+var
+  LElapsedMs: Integer;
+begin
+  TDXLogger.StartupTimeoutMs := 0;
+  TDXLogger.ResetStartupStateForTesting; // window open, no watchdog armed (timeout is 0)
+  TDXLogger.Instance.RegisterProvider(FMockProviderIntf);
+  FMockProvider.Clear;
+
+  DXLog('early');
+  Assert.AreEqual(0, FMockProvider.GetEntryCount,
+    'Entry must be buffered, not dispatched, while the window is still open');
+
+  TDXLogger.StartupTimeoutMs := 200; // must re-arm the watchdog now, window is still open
+
+  // Poll instead of a single fixed Sleep: robust against scheduler jitter
+  // while still bounded (2 s ceiling well above the 200 ms timeout).
+  LElapsedMs := 0;
+  while (FMockProvider.GetEntryCount = 0) and (LElapsedMs < 2000) do
+  begin
+    Sleep(10);
+    Inc(LElapsedMs, 10);
+  end;
+
+  Assert.AreEqual(1, FMockProvider.GetEntryCount,
+    'Re-armed watchdog must auto-close the window and replay the buffered entry once the new StartupTimeoutMs elapses');
+  Assert.AreEqual('early', FMockProvider.GetLastEntry.Message);
+
+  TDXLogger.StartupTimeoutMs := 0; // restore: no watchdog leaks into the next test
 end;
 
 initialization

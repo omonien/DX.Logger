@@ -112,6 +112,8 @@ class procedure TDXLogger.CompleteConfiguration;
 - Closes the window: replays the buffer (order preserved, filtered with the `MinLevel` valid now) to every registered provider except the platform default one, then discards the buffer.
 - Providers registered while the window was open take part in the replay. Providers registered after the close start empty and receive live entries only.
 
+The replay dispatch itself runs **without** holding the internal per-instance lock (only the window-close/buffer-snapshot step is taken under that lock) — this avoids a deadlock when a bound provider's `Log` call blocks the calling thread, e.g. a UI provider that synchronizes onto a full main thread while `CompleteConfiguration` itself was called from that same main thread. One accepted consequence: a live entry logged concurrently right after the window closes may reach a provider before the tail of the startup replay does. This only affects the *relative order in which a provider observes entries* around the close boundary — no entry is ever lost or duplicated, and each entry's `Timestamp` still records its true order.
+
 ### Recommended DPR layout
 
 Put `DX.Logger` and **all** provider units in the `uses` clause before anything else that might log (only memory managers such as FastMM, which must not depend on DX.Logger, go first) — this makes sure their `initialization` sections (and therefore provider registration) run as early as possible. Configure providers as the first statement(s) after `begin`, then close the window explicitly:
