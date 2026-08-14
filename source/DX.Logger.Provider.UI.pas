@@ -24,6 +24,15 @@ unit DX.Logger.Provider.UI;
     - Synchronization to main thread via TThread.Synchronize
     - Optional append on top or bottom
     - Automatic batching for better performance
+
+  Startup behavior:
+    Unlike DX.Logger.Provider.TextFile/Seq, this provider does not register
+    itself on unit initialization -- it must be registered explicitly (as
+    shown above), typically from FormCreate. Once registered, entries are
+    delivered once TDXLogger.CompleteConfiguration closes the configuration
+    window (or the startup timeout elapses). Binding within the default
+    10 s window (the common case for FormCreate) means the memo also shows
+    the buffered boot lines.
 }
 
 interface

@@ -18,6 +18,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DX.Logger.SystemInfo`: `TSystemInfo.GetSnapshot` (CPU-Cores, RAM, OS, Bitness, VM-Hinweis)
   für einmaliges Startup-Logging.
 - `DX.Logger.ThreadCpu`: `TThreadCpuMonitor` — per-Thread-CPU-Diagnose (Top-N + Hot-Thread-IP).
+- **Startup configuration window**: `TDXLogger` now buffers log entries for every registered
+  provider except the platform default one, from process start until the configuration window
+  closes. `TFileLogProvider` becomes active with default settings the instant its unit
+  initializes; `TSeqLogProvider`/`TUILogProvider` require an explicit `RegisterProvider` call from
+  the host application but are equally subject to the window once registered — either way, this is
+  long before the DPR body gets to call `SetLogFileName`, `SetMinLevel`, the Seq server URL, etc.
+  The window makes sure those early entries are neither lost nor written to an unconfigured
+  target. See `docs/CONFIGURATION.md` ("Startup & Configuration Window") for the full picture and
+  the recommended DPR layout.
+- **`TDXLogger.CompleteConfiguration`**: thread-safe, idempotent class procedure that closes the
+  configuration window. Replays all buffered entries, in original order and filtered with the
+  `MinLevel` valid at close time, to every registered provider except the default one, then
+  discards the buffer. Providers registered after `CompleteConfiguration` has returned start empty
+  and receive live entries only; a registration racing the close may still be included in the
+  replay (it never receives less, only more).
+- **`TDXLogger.StartupTimeoutMs`**: class property (default `10000`, i.e. 10 s) controlling the
+  fallback watchdog that auto-closes the configuration window when `CompleteConfiguration` is
+  never called explicitly. `0` disables the auto-close (explicit close or process shutdown only).
+- **Shutdown flush**: the class destructor closes a still-open configuration window (replaying the
+  buffer to all registered providers) before tearing down, so short-lived CLI processes that exit
+  before `StartupTimeoutMs` elapses never lose their early log entries, subject to the startup
+  buffer's 10 000-entry cap (see below).
+- Startup buffer overflow protection: fixed cap of 10 000 entries; on overflow the **newest**
+  entries are dropped (the oldest boot lines carry the highest diagnostic value) and one `Warn`
+  entry reporting the drop count is emitted on replay.
+
+### Changed
+- Non-default providers (File, Seq, UI, and any custom `ILogProvider`) no longer write during the
+  startup configuration window; their entries are buffered and replayed once the window closes
+  (see "Added" above). Unadapted existing applications see file/Seq/UI output appear up to
+  `StartupTimeoutMs` later than before — in exchange the output is complete (subject to the
+  startup buffer's 10 000-entry cap, see "Added" above) and correctly configured. The platform
+  default provider is unaffected and keeps writing immediately, as before.
 
 ## [1.1.0] - 2026-04-15
 

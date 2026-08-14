@@ -8,8 +8,7 @@ program SimpleConsole;
 uses
   System.SysUtils,
   DX.Logger in '..\..\source\DX.Logger.pas',
-  DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas',
-  DX.Logger.Provider.Async in '..\..\source\DX.Logger.Provider.Async.pas';
+  DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas';
 
 begin
   try
@@ -19,6 +18,11 @@ begin
 
     // Configure file provider
     TFileLogProvider.SetLogFileName('SimpleConsole.log');
+
+    // Configuration done — close the startup window so the file provider
+    // starts writing now (otherwise buffered entries would only be flushed
+    // after StartupTimeoutMs or at process exit).
+    TDXLogger.CompleteConfiguration;
 
     // Simple logging examples
     DXLog('Application started');

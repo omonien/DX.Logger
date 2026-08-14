@@ -11,7 +11,9 @@ unit DX.Logger.Provider.TextFile;
       DX.Logger,
       DX.Logger.Provider.TextFile;
 
-    // File logging is automatically activated by using this unit
+    // The provider registers itself on unit initialization; entries are
+    // delivered once TDXLogger.CompleteConfiguration closes the
+    // configuration window (or the startup timeout elapses).
 
   Configuration:
     TFileLogProvider.SetLogFileName('myapp.log');

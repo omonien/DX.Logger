@@ -45,8 +45,9 @@ The example demonstrates:
 1. **Loading configuration** from `config.local.ini`
 2. **Configuring the Seq provider** with server URL, API key, batch size, and flush interval
 3. **Registering the provider** with DX.Logger (automatically validates the connection)
-4. **Logging messages** at different log levels (Trace, Debug, Info, Warn, Error)
-5. **Manual flushing** to ensure all messages are sent
+4. **Closing the startup configuration window** via `TDXLogger.CompleteConfiguration`, so log entries flow to Seq immediately instead of waiting for the 10 s fallback timeout
+5. **Logging messages** at different log levels (Trace, Debug, Info, Warn, Error)
+6. **Manual flushing** to ensure all messages are sent
 
 ## Expected Output
 
@@ -59,6 +60,7 @@ Loading configuration from: Y:\DX.Logger\examples\SeqExample\Win32\Debug\config.
 Configuration loaded successfully.
 Registering Seq provider (connection will be validated automatically)...
 Seq provider registered.
+Startup configuration window closed - log entries flow to Seq immediately.
 
 Sending log messages to Seq...
 

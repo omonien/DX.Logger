@@ -6,7 +6,6 @@ uses
   System.SysUtils,
   System.IniFiles,
   DX.Logger in '..\..\source\DX.Logger.pas',
-  DX.Logger.Provider.Async in '..\..\source\DX.Logger.Provider.Async.pas',
   DX.Logger.Provider.Seq in '..\..\source\DX.Logger.Provider.Seq.pas',
   DX.Logger.Provider.TextFile in '..\..\source\DX.Logger.Provider.TextFile.pas';
 
@@ -81,6 +80,12 @@ begin
     WriteLn('Registering Seq provider (connection will be validated automatically)...');
     TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
     WriteLn('Seq provider registered.');
+
+    // Configuration and registration done — close the startup window so
+    // buffered entries are replayed to Seq now instead of after the
+    // 10 s fallback timeout.
+    TDXLogger.CompleteConfiguration;
+    WriteLn('Startup configuration window closed - log entries flow to Seq immediately.');
     WriteLn;
 
     // Optional: You can also call ValidateConnection manually if needed,

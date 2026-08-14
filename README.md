@@ -66,6 +66,11 @@ begin
   TFileLogProvider.SetLogFileName('myapp.log');
   TFileLogProvider.SetMaxFileSize(10 * 1024 * 1024); // 10 MB
 
+  // Close the startup window so the file provider writes immediately
+  // instead of buffering until StartupTimeoutMs (see "Startup & Configuration
+  // Window" below).
+  TDXLogger.CompleteConfiguration;
+
   DXLog('Application started');
   // ... your code
   DXLog('Application stopped');
@@ -120,6 +125,50 @@ The `Details` parameter in log functions provides additional contextual informat
 
 This design allows each provider to optimize details handling for its specific use case while maintaining a consistent API.
 
+## Startup & Configuration Window
+
+`TFileLogProvider` registers itself in its unit's `initialization` section and becomes active immediately with default settings — before your DPR gets a chance to call `SetLogFileName`, `SetMinLevel`, etc. `TSeqLogProvider` and `TUILogProvider` do not self-register (registering them is left to the host application), but the same gap applies once they are: application-specific configuration can only run in the DPR body, potentially after entries could already be logged. To keep early entries from being written to the wrong target (or racing a not-yet-configured provider), `TDXLogger` opens a **configuration window** from process start:
+
+| Situation | Default provider | All other registered providers |
+|---|---|---|
+| Window **open** | writes immediately (current `MinLevel` applies, as today) | receive **nothing**; every entry is appended to the startup buffer (unfiltered, all levels) |
+| Window **closes** | unchanged | buffered entries are replayed **in original order**, filtered with the `MinLevel` valid *at close time*; buffer is discarded afterwards |
+| Window **closed** | unchanged | live dispatch, as today |
+
+Close the window explicitly by calling `TDXLogger.CompleteConfiguration` as the first statement(s) after `begin`, once all providers are configured:
+
+```pascal
+program MyApp;
+
+uses
+  // Memory managers (FastMM etc.) first — they must not depend on DX.Logger.
+  // Then the logger and ALL provider units, before anything else, so their
+  // initialization runs as early as possible:
+  DX.Logger,
+  DX.Logger.Provider.TextFile,
+  Vcl.Forms,
+  { ... },
+  Main.Form in 'Main.Form.pas';
+
+begin
+  // Configure providers first, then close the configuration window.
+  // Without CompleteConfiguration the window auto-closes after
+  // TDXLogger.StartupTimeoutMs (default: 10 s) or at process shutdown —
+  // early entries are never lost either way, subject to the startup
+  // buffer's 10 000-entry cap (oldest entries kept; newest dropped on
+  // overflow, with the drop count reported at replay).
+  TFileLogProvider.SetLogFileName('LOG\MyApp.log');
+  TDXLogger.SetMinLevel(TLogLevel.Trace);
+  TDXLogger.CompleteConfiguration;
+  Application.Initialize;
+  { ... }
+end.
+```
+
+If your DPR never calls `CompleteConfiguration` explicitly — or a UI provider is only bound later (e.g. in `FormCreate`) — the window still closes automatically after `TDXLogger.StartupTimeoutMs` (default `10000` ms), or at the latest during process shutdown. Early entries are never lost either way, subject to the startup buffer's 10 000-entry cap (oldest entries kept; newest dropped on overflow, with the drop count reported at replay); unadapted existing applications just see non-default-provider output appear up to `StartupTimeoutMs` later than before.
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#startup--configuration-window) for the full picture, including `StartupTimeoutMs` semantics, UI-provider timing, and notes for custom-provider authors.
+
 ## Providers
 
 ### File Provider
@@ -146,6 +195,10 @@ TFileLogProvider.SetMaxFileSize(5 * 1024 * 1024); // 5 MB
 
 // Register provider
 TDXLogger.Instance.RegisterProvider(TFileLogProvider.Instance);
+
+// Close the startup window so buffered entries are replayed immediately
+// instead of after StartupTimeoutMs (see "Startup & Configuration Window" above).
+TDXLogger.CompleteConfiguration;
 ```
 
 When the log file reaches the maximum size, it's automatically renamed with a timestamp and a new file is created.
@@ -177,6 +230,10 @@ TSeqLogProvider.SetFlushInterval(5000);  // Default: 2000 ms
 
 // Register provider
 TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
+
+// Close the startup window so buffered entries are replayed immediately
+// instead of after StartupTimeoutMs (see "Startup & Configuration Window" above).
+TDXLogger.CompleteConfiguration;
 
 // Use logging as normal
 DXLog('Application started');
@@ -210,6 +267,12 @@ uses
 TUILogProvider.Instance.ExternalStrings := MemoInfo.Lines;
 TUILogProvider.Instance.AppendOnTop := False;  // False = append at bottom (default)
 TDXLogger.Instance.RegisterProvider(TUILogProvider.Instance);
+
+// Binding here (e.g. FormCreate) relies on the startup window's fallback
+// timer (StartupTimeoutMs, default 10 s) to replay buffered boot lines into
+// the memo — or call TDXLogger.CompleteConfiguration explicitly once every
+// provider is configured. See "Startup & Configuration Window" above and
+// docs/CONFIGURATION.md#ui-providers for both patterns.
 
 // Use logging as normal
 DXLog('Application started');

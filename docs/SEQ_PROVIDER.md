@@ -38,6 +38,10 @@ TSeqLogProvider.SetApiKey('your-api-key-here');
 // Register provider
 TDXLogger.Instance.RegisterProvider(TSeqLogProvider.Instance);
 
+// Close the startup window so buffered entries are replayed immediately
+// instead of after StartupTimeoutMs (see CONFIGURATION.md#startup--configuration-window).
+TDXLogger.CompleteConfiguration;
+
 // Log as usual
 DXLog('Application started');
 DXLogError('Something went wrong!');
