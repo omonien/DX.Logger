@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-14
+
 ### Changed (BREAKING)
 - `DX.Logger.CpuInfo` und `DX.Logger.MemoryInfo` wurden zu **`DX.Logger.SystemInfo`**
   zusammengeführt. Typen (`TProcessCpuMonitor`, `TProcessMemoryMonitor`, …) und die
@@ -108,7 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration template system (config.example.ini)
 - Security policy and vulnerability reporting process
 
-[Unreleased]: https://github.com/omonien/DX.Logger/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/omonien/DX.Logger/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/omonien/DX.Logger/releases/tag/v2.0.0
 [1.1.0]: https://github.com/omonien/DX.Logger/releases/tag/v1.1.0
 [1.0.0]: https://github.com/omonien/DX.Logger/releases/tag/v1.0.0
 
