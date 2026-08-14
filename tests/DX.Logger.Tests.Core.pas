@@ -883,6 +883,20 @@ end;
 // so a below-MinLevel entry could in principle leak to providers in the
 // narrow race described at that guard's call site. This exercises the
 // closed-window dispatch path directly and asserts the guard holds.
+//
+// Coverage note (review round 1, Important — documented per controller
+// ruling instead of adding a race-forcing test): the window here is
+// stably closed for the whole test (CompleteConfiguration ran before any
+// DXLog* call), so every assertion is actually satisfied by the cheap
+// unlocked pre-filter at the top of Log, not by the new guard line itself
+// — this test characterizes the closed-window path's MinLevel behavior
+// end-to-end, it does not exercise the race-only guard line in isolation.
+// Forcing that specific line to be the one that fires would need either a
+// production test seam (a way to pause Log between the pre-filter read and
+// the guard) or a timing-based race, which would be flaky. The closest
+// thing this suite has to covering the actual race under concurrent
+// pressure is TestNoEntryLostWhenClosingConcurrently above. See the
+// matching comment at the guard's call site in DX.Logger.pas (Log).
 procedure TDXLoggerTests.TestClosedWindowFallThroughRespectsMinLevel;
 begin
   TDXLogger.ResetStartupStateForTesting;

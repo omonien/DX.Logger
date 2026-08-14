@@ -746,6 +746,23 @@ begin
   // otherwise reach the provider loop below unfiltered. Re-checking here —
   // after LBuffered has authoritatively confirmed the window is closed —
   // closes that gap.
+  //
+  // Defense-in-depth: this line is reachable in the ordinary case too
+  // (whenever the window is already stably closed, the pre-filter above
+  // already exits before this point is ever reached for a below-MinLevel
+  // entry) — but it is only ever *load-bearing*, i.e. the thing that
+  // actually stops an entry, in the race window described above, where the
+  // window closed concurrently between the unlocked pre-filter read and
+  // this point. That interleaving cannot be forced deterministically from
+  // a unit test without a production test seam (and a timing-based
+  // reproduction would be flaky); the closest thing this codebase has to
+  // covering that race under real concurrent pressure is
+  // TestNoEntryLostWhenClosingConcurrently (DX.Logger.Tests.Core.pas),
+  // which hammers Log from a worker thread while CompleteConfiguration
+  // runs concurrently on the main thread. TestClosedWindowFallThroughRespectsMinLevel
+  // covers this guard's *code path* (stably-closed-window MinLevel
+  // filtering) but not the race interleaving itself — see the comment on
+  // that test.
   if ALevel < FMinLevel then
     Exit;
 
@@ -883,32 +900,22 @@ var
   LEvent: TEvent;
   LThread: TThread;
 begin
-  // Compute inputs and create the fresh TEvent under FLock (cheap,
-  // non-blocking) so a concurrent StopWatchdog/CompleteConfiguration can
-  // never observe a half-initialized FWatchdogEvent.
+  // Cheap, non-blocking read-and-decide under FLock: nothing is created yet.
   TMonitor.Enter(FLock);
   try
     LTimeoutMs := FStartupTimeoutMs;
     if (LTimeoutMs = 0) or (not FWindowOpen) then
       Exit; // disabled, or window already closed: nothing to guard
-
-    LEvent := TEvent.Create(nil, False, False, ''); // auto-reset, initially unsignaled
-    FWatchdogEvent := LEvent;
   finally
     TMonitor.Exit(FLock);
   end;
 
-  // Creating and starting the thread happens OUTSIDE FLock by design: the
-  // watchdog body below waits on LEvent and, on timeout, calls
-  // CompleteConfiguration, which itself re-acquires FLock. Doing that while
-  // this method still held FLock would make the lock's hold time depend on
-  // OS thread-creation latency for no benefit, and ties the two operations
-  // together for a case that does not need it (TThread.Start merely resumes
-  // the new thread; its body runs asynchronously, not synchronously here,
-  // so there is no deadlock either way — but keeping thread creation outside
-  // any lock is the safer, simpler invariant to maintain as this code
-  // evolves). Only the final FWatchdogThread assignment below is briefly
-  // locked, matching how StopWatchdog reads/clears it.
+  // Create the event and the thread OUTSIDE FLock: both are pure object
+  // construction here. TThread.CreateAnonymousThread returns the thread in
+  // a not-yet-running (suspended) state -- an explicit Start below is
+  // required to actually resume it -- so no watchdog body can execute, and
+  // nothing here needs to race FLock.
+  LEvent := TEvent.Create(nil, False, False, ''); // auto-reset, initially unsignaled
   LThread := TThread.CreateAnonymousThread(
     procedure
     begin
@@ -919,14 +926,55 @@ begin
       // without action either way.
     end);
   LThread.FreeOnTerminate := False; // joinable: StopWatchdog calls WaitFor + Free
-  LThread.Start;
 
+  // FIX (review round 1, Critical -- use-after-free window): publish BOTH
+  // FWatchdogEvent and FWatchdogThread together, in the SAME FLock section,
+  // before Start. The original version assigned FWatchdogEvent, released
+  // FLock, created+started the thread, and only THEN (a separate, later
+  // FLock section) assigned FWatchdogThread. That left a window where a
+  // concurrent StopWatchdog could run in between those two lock sections:
+  // it would see FWatchdogEvent already set (so it frees the event) but
+  // FWatchdogThread still nil (so it skips the join) -- freeing an event
+  // the already-running watchdog closure was still waiting on
+  // (use-after-free on the event handle) while leaving that thread itself
+  // never stopped. Publishing both together under one lock closes the
+  // window completely: StopWatchdog's own snapshot (also taken under
+  // FLock, see StopWatchdog) can now only ever observe the fully-armed
+  // pair or nothing at all -- never one without the other.
   TMonitor.Enter(FLock);
   try
+    FWatchdogEvent := LEvent;
     FWatchdogThread := LThread;
   finally
     TMonitor.Exit(FLock);
   end;
+
+  // Start only after releasing FLock: the watchdog body calls
+  // CompleteConfiguration on timeout, which itself re-acquires FLock --
+  // that must never run synchronously while this method still holds it.
+  // Start itself is non-blocking (it just resumes the already-created,
+  // currently-suspended thread), so deferring it to here costs nothing.
+  //
+  // Residual ordering note (verified while fixing the Critical above, per
+  // "verify no other ordering assumption breaks"): between the publish
+  // above and this Start call, a concurrent StopWatchdog could in
+  // principle snapshot this exact (LThread, LEvent) pair and call
+  // LThread.WaitFor before Start has actually run -- WaitFor on a
+  // not-yet-started thread blocks until something resumes it, which would
+  // only be this same Start call a few lines below. This is not a live
+  // hazard given the actual call sites: ArmWatchdog is only ever reached
+  // (a) once per process, from Instance's first-access path -- serialized
+  // by the double-checked locking there, so no second "first access" can
+  // exist to run a concurrent ArmWatchdog for the same instance -- or (b)
+  // from ResetStartupStateForTesting, which always calls StopWatchdog
+  // BEFORE ArmWatchdog on the SAME calling thread, so no other thread can
+  // be inside StopWatchdog for this watchdog generation while this method
+  // sits between publish and Start. No code path calls StopWatchdog and
+  // ArmWatchdog concurrently on two different threads for the same
+  // generation today; if one is ever added, this ordering would need
+  // revisiting (e.g. moving Start inside the lock above, trading a larger
+  // FLock hold time for eliminating this window outright).
+  LThread.Start;
 end;
 
 class procedure TDXLogger.StopWatchdog;
